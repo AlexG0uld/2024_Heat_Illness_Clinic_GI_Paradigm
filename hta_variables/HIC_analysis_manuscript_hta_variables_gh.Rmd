@@ -1,0 +1,189 @@
+---
+title: "HIC HTA Variables"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+html_document:
+  toc: yes
+toc_float: yes
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      out.extra = "",
+                      message = FALSE, 
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc")) 
+```
+
+## Library
+
+```{r library}
+# Load the libraries
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(jmv)
+```
+
+## Parameters
+
+```{r directory}
+data_dir = "..."
+analysis_dir = "..."
+pw_message   = "..."
+```
+
+## Load Data
+Next we load in the data:
+
+```{r load_data}
+## load data here...
+```
+
+# HTA variables
+
+## Patients and Controls
+
+### Descriptives
+
+```{r descriptives_Class}
+jmv::descriptives(
+    formula = duration + osmo ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r descriptives_Class2}
+jmv::descriptives(
+    formula = st1_in + phase2_in + st2_in + st3_in ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r descriptives_Class3}
+jmv::descriptives(
+    formula = st1_MHP + phase2_mhp + st2_mhp + st3_MHP ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+                     
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Class}
+jmv::ttestIS(
+    formula = st1_in + st3_in + st1_MHP + st3_MHP ~ Class,
+    data = dat,
+    vars = vars(st1_in, st3_in, st1_MHP, st3_MHP),
+    norm = TRUE,
+    eqv = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Class}
+jmv::ttestIS(
+    formula = duration + osmo + st2_in + st2_mhp + phase2_in + phase2_mhp ~ Class,
+    data = dat,
+    vars = vars(duration, osmo, st2_in, st2_mhp, phase2_in, phase2_mhp),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE)
+```
+
+## Heat Tolerant and Intolerants
+
+### Descriptives
+
+```{r descriptives_Outcome}
+jmv::descriptives(
+    formula = duration + osmo ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r descriptives_Outcome2}
+jmv::descriptives(
+    formula = st1_in + phase2_in + st2_in + st3_in ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r descriptives_Outcome3}
+jmv::descriptives(
+    formula = st1_MHP + phase2_mhp + st2_mhp + st3_MHP ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+                     
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Outcome}
+jmv::ttestIS(
+    formula = st1_in + st2_in + st3_in + st1_MHP + st3_MHP + phase2_in ~ Outcome,
+    data = dat,
+    vars = vars(st1_in, st2_in, st3_in, st1_MHP, st3_MHP, phase2_in),
+    norm = TRUE,
+    eqv = TRUE)
+```
+
+Welch's T-Test:
+
+```{r parametric_Welch_Outcome}
+jmv::ttestIS(
+    formula = st1_in + phase2_in~ Outcome, # St1_in & phase2_in violates assumption of equal variances
+    data = dat,
+    vars = vars(st1_in, phase2_in),
+    students = FALSE,
+    welchs = TRUE,
+    norm = TRUE,
+    eqv = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Outcome}
+jmv::ttestIS(
+    formula = duration + osmo + st2_mhp + phase2_mhp ~ Outcome,
+    data = dat,
+    vars = vars(duration, osmo, st2_mhp, phase2_mhp),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_hta_variables.Rout"))
+```
