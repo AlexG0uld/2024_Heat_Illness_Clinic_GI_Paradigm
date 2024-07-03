@@ -1,0 +1,145 @@
+---
+title: "HIC diet analysis"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+html_document:
+  toc: yes
+toc_float: yes
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      out.extra = "",
+                      message = FALSE, 
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc")) 
+```
+
+## Library
+
+```{r library}
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(jmv)
+```
+
+## Parameters
+
+```{r parameters}
+data_dir = "..."
+analysis_dir = "..."
+pw_message   = "..."
+```
+
+## Load data
+
+```{r load_data}
+## load data here...
+```
+
+# Diet
+
+## Patient and Controls
+
+### Descriptives
+
+```{r descriptives_Class}
+jmv::descriptives(
+    formula = energy + protein + carb + fat ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Class}
+jmv::ttestIS(
+    formula = energy + carb + fat ~ Class,
+    data = dat,
+    vars = vars(energy, carb, fat),
+    norm = TRUE,
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Class}
+jmv::ttestIS(
+    formula = protein ~ Class,
+    data = dat,
+    vars = vars(protein),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+## Heat Tolerant and Intolerant
+
+### Descriptives
+
+```{r descriptives_Outcome}
+jmv::descriptives(
+    formula = energy + protein + carb + fat ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Outcome}
+jmv::ttestIS(
+    formula = energy + carb + fat ~ Outcome,
+    data = dat,
+    vars = vars(energy, carb, fat),
+    norm = TRUE,
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Outcome}
+jmv::ttestIS(
+    formula = protein ~ Outcome,
+    data = dat,
+    vars = vars(protein),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_diet.Rout"))
+``` 
