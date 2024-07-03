@@ -1,0 +1,4212 @@
+---
+title: "HIC Biomarkers Analysis (manuscript)"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+  html_document:
+    toc: yes
+    toc_float: yes
+    number_sections: true
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      dev = c('pdf', 'png'),
+                      width = 60,
+                      fig.align = 'center',
+                      fig.height = 10,
+                      fig.width = 10,
+                      fig.dpi = 300,
+                      fig.pos = "!H",
+                      dpi = 300,
+                      out.extra = "",
+                      message = FALSE,
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc"),
+                      fig.path='figs/rmd/')
+```
+
+## Library 
+
+```{r Library}
+## Load the libraries
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(moments)
+library(jmv)
+library(rstatix)
+library(lmerTest)
+library(performance)
+library(emmeans)
+library(ggtext)
+library(ggpubr)
+library(gridtext) 
+library(scales)
+library(boxcoxmix)
+```
+
+## Parameters
+
+``` {r Parameters}
+analysis_dir = "..."
+data_dir     = "..."
+pw_message   = "..."
+font         = element_text(family = "serif")
+group_cols   = c("Control" = "#0099CC", "Patient" = "#FF9900",
+                 "Tolerant" = "#005900", "Intolerant" = "#ff2c15")
+```
+
+### Figure Parameters
+
+```{r figure_theme}
+## create custom theme
+theme_ag <- function(){
+
+  theme_classic() %+replace%
+    
+    theme(
+      text = font,
+      axis.text.y  = element_text(size = 12, margin = margin(r = 3)),
+      axis.title.y = element_text(size = 16, angle = 90, vjust = 2),
+      axis.text.x  = element_text(size = 16, vjust = -0.5),
+      axis.title.x = element_text(size = 16),
+      legend.title = element_text(size = 16),
+      legend.text = element_text(size = 14)
+    )
+}
+```
+
+Now, make custom axis titles to use throughout:
+
+```{r figure_custom_y_axis}
+IFABP_axis     = expression("Serum [I-FABP]" ~ "(pg·" * mL^-1 * ")")
+IFABP_axis_log = expression("Serum" ~ "[I-FABP] " [Log] ~ "(pg·" * mL^-1 * ")")
+CLDN3_axis     = expression("Plasma [CLDN-3]" ~ "(ng·" * mL^-1 * ")")
+LBP_axis       = expression("Plasma [LBP]" ~ "(µg·" * mL^-1 * ")")
+LBP_axis_log   = expression("Plasma" ~ "[LBP] " [Log] ~ "(µg·" * mL^-1 * ")")
+CD14_axis      = expression("Plasma [sCD14]" ~ "(µg·" * mL^-1 * ")")
+IL6_axis       = expression("Plasma [IL-6]" ~ "(pg·" * mL^-1 * ")")
+IL6_axis_log   = expression("Plasma" ~ "[IL-6] " [Log] ~ "(pg·" * mL^-1 * ")")
+```
+
+Specify comparisons to be made for `stat_compare_means()`
+
+```{r comparisons}
+comparison_group     = list(c("Control.Pre","Patient.Pre"),
+                            c("Control.Post","Patient.Post"))
+comparison_timepoint = list(c("Control.Pre","Control.Post"),
+                            c("Patient.Pre","Patient.Post"))
+```
+
+Fix for `stat_compare_means()` function to allow Times New Roman font. Thank you https://stackoverflow.com/questions/77346644/stat-compare-means-unable-to-change-font-family-when-using-comparisons-argu 
+
+```{r stat_compare_means_fix}
+fixed_call <- quote(ggsignif::geom_signif(comparisons = comparisons, 
+                                          y_position = label.y, 
+                                          test = method, test.args = method.args, 
+                                          step_increase = step.increase, 
+                                          size = bracket.size, textsize = 6, color = color, 
+                                          map_signif_level = map_signif_level, 
+                                          tip_length = tip.length, data = data,
+                                          vjust = vjust, ...))
+
+scm <- as.list(ggpubr::stat_compare_means)
+scm[[26]][[2]][[3]][[13]] <- fixed_call
+stat_compare_means <- function(...) {
+  ggp <- getNamespace('ggpubr')
+  .method_info <- ggp$.method_info
+  .add_item <- ggp$.add_item
+  .is_p.signif_in_mapping <- ggp$.is_p.signif_in_mapping
+  .is_empty <- ggp$.is_empty
+  do.call(as.function(scm), list(...), quote = FALSE)
+}
+```
+
+## Load Data
+Next we load in the data:
+
+``` {r load_data}
+## data loaded here... 
+
+## Load data sets
+data <- read.xlsx(paste0(data_dir,"HIC ELISA workbook_HTA_PVadjust.xlsx"),
+                  sheetIndex = 7,
+                  password = rstudioapi::askForPassword(pw_message)) %>%
+  ## Recode grouping columns
+  dplyr::mutate(Class = dplyr::recode(Class, "1" = "Patient", "2" = "Control")) %>%
+  ## Rename Class to Group
+  dplyr::rename(Group = Class) %>%
+  dplyr::mutate(Outcome = dplyr::recode(Outcome, "1" = "Tolerant", "2" = "Intolerant")) %>%
+  dplyr::mutate(Pre_EHI = dplyr::recode(Pre_EHI, "1" = "Yes", "2" = "No")) %>%
+  ## Create factor levels of interest
+  dplyr::mutate(Group = factor(Group, levels = c("Control", "Patient")),
+                Outcome = factor(Outcome, levels = c("Tolerant", "Intolerant")),
+                Pre_EHI = factor(Pre_EHI, levels = c("No", "Yes"))) %>%
+  ## Remove Delta scores
+  dplyr::select(!contains("Delta")) %>%
+  ## Change all occurrences of <1 to 0 and set to numeric
+  dplyr::mutate(CRP_Pre = if_else(CRP_Pre == "<1", "0", CRP_Pre),
+                CRP_Pre = as.numeric(CRP_Pre))
+
+head(data)
+```
+
+LMM analysis code and info from [here](https://bookdown.org/pingapang9/linear_models_bookdown/chap-premidpost.html#linear-mixed-models-and-interaction-effects). 
+  
+Analysis of blood biomarkers will be conducted for:  
+1. Patient and Controls  
+2. Heat Tolerant and Intolerant  
+  
+Group (control vs patient), timepoint (pre vs post) and their interaction will be included as fixed effects to examine group differences. Additionally, each model included random intercepts assigned to each participant to account for within-participant correlation for repeated measures. Each model will then be run through a type III ANOVA (with Satterthwaite df) to determine significance of the fixed effects. Model performance was assessed using the performance package (REF). Data were log transformed if the residuals violated the assumption of normality.  The conditional (fixed and random effects) and marginal (fixed effects) R2 values are presented in each biomarker figure.  
+  
+Baseline biomarker analysis of Zonulin and CRP are also included.  
+  
+# Patient and Controls
+
+## IFABP
+
+### Data Frame 
+
+``` {r Group_IFABP_long_format}
+## long data frame
+IFABP_long <- data %>%
+  dplyr::select(UIN, Group, IFABP_Pre, IFABP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IFABP_Pre,
+                Post = IFABP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "IFABP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(IFABP_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Group_IFABP_histogram}
+ggplot(IFABP_long, aes(x = IFABP, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of I-FABP by Group and Timepoint",
+       x = "I-FABP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Group_IFABP_qqplot}
+ggplot(IFABP_long, aes(sample = IFABP)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of I-FABP by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_IFABP_normality}
+IFABP_long %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IFABP)$statistic,
+    SW_pval = format(shapiro.test(IFABP)$p.value, scientific = FALSE),
+    skewness = skewness(IFABP, na.rm = TRUE),
+    kurtosis = kurtosis(IFABP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Group_IFABP_descriptives}
+## Create wide data frame
+IFABP_wide <- IFABP_long %>%
+  pivot_wider(names_from = Timepoint, values_from = IFABP)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = IFABP_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw Data
+
+```{r Group_IFABP_LMM}
+## Linear mixed model with interaction
+IFABP_model <- IFABP_long %>%
+  lmerTest::lmer(IFABP ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IFABP_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_IFABP_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IFABP_model)
+
+## Check normality of residuals
+performance::check_normality(IFABP_model)
+```
+
+Run on log transformed data.
+
+### Log Transformation
+
+```{r Group_IFABP_log_transform}
+## long data frame and log transform IFABP
+IFABP_long_log <- data %>%
+  dplyr::select(UIN, Group, IFABP_Pre, IFABP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IFABP_Pre,
+                Post = IFABP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "IFABP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(IFABP = log(IFABP))
+
+head(IFABP_long_log)
+```
+
+#### Histogram 
+
+```{r Group_IFABP_log_histogram}
+ggplot(IFABP_long_log, aes(x = IFABP, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of I-FABP by Group and Timepoint",
+       x = "I-FABP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Group_IFABP_log_qqplot}
+ggplot(IFABP_long_log, aes(sample = IFABP)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of I-FABP by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_IFABP_log_normality}
+IFABP_long_log %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IFABP)$statistic,
+    SW_pval = format(shapiro.test(IFABP)$p.value, scientific = FALSE),
+    skewness = skewness(IFABP, na.rm = TRUE),
+    kurtosis = kurtosis(IFABP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Group_IFABP_descriptives_log}
+IFABP_wide_log <- IFABP_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = IFABP)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = IFABP_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Group_IFABP_LMM_log}
+## Linear mixed model with interaction
+IFABP_log_model <- IFABP_long_log %>%
+  lmerTest::lmer(IFABP ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IFABP_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_IFABP_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IFABP_log_model)
+
+## Check normality of residuals
+performance::check_normality(IFABP_log_model)
+```
+
+#### ANOVA
+
+```{r Group_IFABP_LMM_res}
+## Run through anova
+res <- IFABP_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Group_IFABP_log_LMM_posthoc}
+## get effect size symbols when printing results
+options(es.use_symbols = TRUE)
+
+## emmeans
+emm <- emmeans::emmeans(IFABP_log_model, list(pairwise ~ Timepoint:Group), adjust = "holm")
+emm$`emmeans of Timepoint, Group`
+
+## Save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Group`)
+
+## Effect size for main (Timepoint and Group) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Group
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Group_IFABP_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+IFABP_ann <-
+  "LMM: Conditional *R*^2^ = 0.839, Marginal *R*^2^ = 0.123<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 84.366, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.60<br>
+Group: *F*<sub>(1, 58)</sub> = 0.212, *p* = 0.647, *η*^2^<sub>*p*</sub> = <0.01<br>
+Interaction: *F*<sub>(1, 57)</sub> = 0.026, *p* = 0.874, *η*^2^<sub>*p*</sub> = <0.01"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Group_IFABP_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+IFABP_long_log <- IFABP_long_log %>%
+  dplyr::mutate(GroupTimepoint = factor(interaction(Group, Timepoint), 
+                                         levels = c("Control.Pre", 
+                                                    "Control.Post", 
+                                                    "Patient.Pre", 
+                                                    "Patient.Post")))
+
+group_IFABP_log_fig <- IFABP_long_log %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = IFABP,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IFABP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IFABP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = IFABP_axis_log) +
+  scale_y_continuous(breaks = seq(0, 9, 1),
+                     limits = c(0, 9),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+group_IFABP_log_fig
+```
+
+#### Add emmeans
+
+``` {r Group_IFABP_log_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Group = c(emmeans_se$Group[1], emmeans_se$Group[2], emmeans_se$Group[3], emmeans_se$Group[4]),
+  IFABP = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create GroupTimepoint interaction column
+emm_data$GroupTimepoint <- factor(interaction(emm_data$Group, emm_data$Timepoint),
+                                  levels = c("Control.Pre", "Control.Post",
+                                             "Patient.Pre", "Patient.Post"))
+
+## Now merge data
+IFABP_long_log_merged <- merge(IFABP_long_log, emm_data, by = c("GroupTimepoint", "Group", "Timepoint"))
+
+## Plot
+group_IFABP_log_emm_fig <- IFABP_long_log_merged %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = IFABP.x,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IFABP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IFABP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = IFABP.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(IFABP_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = IFABP.y - SE, 
+                    ymax = IFABP.y + SE), 
+                position = position_nudge(x = ifelse(IFABP_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = IFABP_axis_log) +
+  scale_y_continuous(breaks = seq(0, 9, 1),
+                     limits = c(0, 9),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(shape = guide_legend(override.aes = list(size = 3)))
+
+group_IFABP_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Group_IFABP_log_title_fig, fig.height = 6, fig.width = 7}
+## add IFABP_ann title to the plot
+group_IFABP_log_emm_title_fig <- group_IFABP_log_emm_fig +
+  labs(title = IFABP_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+group_IFABP_log_emm_title_fig
+```
+
+## Claudin 3
+
+### Data Frame 
+
+``` {r Group_CLDN3_long_format}
+## long data frame
+CLDN3_long <- data %>%
+  dplyr::select(UIN, Group, CLDN3_Pre, CLDN3_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CLDN3_Pre,
+                Post = CLDN3_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "CLDN3") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(CLDN3_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Group_CLDN3_histogram}
+ggplot(CLDN3_long, aes(x = CLDN3, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of Claudin 3 by Group and Timepoint",
+       x = "Claudin 3",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Group_CLDN3_qqplot}
+ggplot(CLDN3_long, aes(sample = CLDN3)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of Claudin 3 by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_CLDN3_normality}
+CLDN3_long %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CLDN3)$statistic,
+    SW_pval = format(shapiro.test(CLDN3)$p.value, scientific = FALSE),
+    skewness = skewness(CLDN3, na.rm = TRUE),
+    kurtosis = kurtosis(CLDN3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Group_CLDN3_descriptives}
+## Create wide data frame
+CLDN3_wide <- CLDN3_long %>%
+  pivot_wider(names_from = Timepoint, values_from = CLDN3)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = CLDN3_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Group_CLDN3_LMM}
+## Linear mixed model with interaction
+CLDN3_model <- CLDN3_long %>%
+  lmerTest::lmer(CLDN3 ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CLDN3_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_CLDN3_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CLDN3_model)
+
+## Check normality of residuals
+performance::check_normality(CLDN3_model)
+```
+
+Continue with model on raw data. 
+
+#### ANOVA
+
+```{r Group_CLDN3_LMM_res}
+## Run through anova
+res <- CLDN3_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Group_CLDN3_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(CLDN3_model, list(pairwise ~ Timepoint:Group), adjust = "holm")
+emm$`emmeans of Timepoint, Group`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Group`)
+
+## Effect size for main (Timepoint and Group) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Group
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Group_CLDN3_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+CLDN3_ann <-
+  "LMM: Conditional *R*^2^ = 0.779, Marginal *R*^2^ = 0.091<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 33.157, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.37<br>
+Group: *F*<sub>(1, 57)</sub> = 1.908, *p* = 0.173, *η*^2^<sub>*p*</sub> = 0.03<br>
+Interaction: *F*<sub>(1, 57)</sub> = 0.323, *p* = 0.572, *η*^2^<sub>*p*</sub> = 0.01"
+```
+
+### Figure
+
+#### Raw Data
+
+Plot with pairwise lines:
+
+``` {r Group_CLDN3_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+CLDN3_long <- CLDN3_long %>%
+  dplyr::mutate(GroupTimepoint = factor(interaction(Group, Timepoint), 
+                                         levels = c("Control.Pre", 
+                                                    "Control.Post", 
+                                                    "Patient.Pre", 
+                                                    "Patient.Post")))
+
+group_CLDN3_fig <- CLDN3_long %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = CLDN3,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"),
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(CLDN3_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(CLDN3_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = CLDN3_axis) +
+  scale_y_continuous(breaks = seq(0, 15, 2),
+                     limits = c(0, 15),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+group_CLDN3_fig
+```
+
+#### Add emmeans
+
+``` {r Group_CLDN3_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Group = c(emmeans_se$Group[1], emmeans_se$Group[2], emmeans_se$Group[3], emmeans_se$Group[4]),
+  CLDN3 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create GroupTimepoint interaction column
+emm_data$GroupTimepoint <- factor(interaction(emm_data$Group, emm_data$Timepoint),
+                                  levels = c("Control.Pre", "Control.Post",
+                                             "Patient.Pre", "Patient.Post"))
+
+## Now merge data
+CLDN3_long_merged <- merge(CLDN3_long, emm_data, by = c("GroupTimepoint", "Group", "Timepoint"))
+
+## Plot
+group_CLDN3_emm_fig <- CLDN3_long_merged %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = CLDN3.x,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(CLDN3_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(CLDN3_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = CLDN3.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(CLDN3_long_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = CLDN3.y - SE, 
+                    ymax = CLDN3.y + SE), 
+                position = position_nudge(x = ifelse(CLDN3_long_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = CLDN3_axis) +
+  scale_y_continuous(breaks = seq(0, 15, 2),
+                     limits = c(0, 15),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(shape = guide_legend(override.aes = list(size = 3)))
+
+group_CLDN3_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Group_CLDN3_title_fig, fig.height = 6, fig.width = 7}
+## add CLDN3_ann title to the plot
+group_CLDN3_emm_title_fig <- group_CLDN3_emm_fig +
+  labs(title = CLDN3_ann) +
+  theme(plot.title = element_markdown(size = 14,lineheight = 1.2))
+
+group_CLDN3_emm_title_fig
+```
+
+## Lipopolysaccharide Binding Protein
+
+### Data Frame 
+
+``` {r Group_LBP_long_format}
+## long data frame
+LBP_long <- data %>%
+  dplyr::select(UIN, Group, LBP_Pre, LBP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = LBP_Pre,
+                Post = LBP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "LBP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(LBP_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Group_LBP_histogram}
+ggplot(LBP_long, aes(x = LBP, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of LBP by Group and Timepoint",
+       x = "LBP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Group_LBP_qqplot}
+ggplot(LBP_long, aes(sample = LBP)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of LBP by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_LBP_normality}
+LBP_long %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(LBP)$statistic,
+    SW_pval = format(shapiro.test(LBP)$p.value, scientific = FALSE),
+    skewness = skewness(LBP, na.rm = TRUE),
+    kurtosis = kurtosis(LBP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Group_LBP_descriptives}
+## Create wide data frame
+LBP_wide <- LBP_long %>%
+  pivot_wider(names_from = Timepoint, values_from = LBP)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = LBP_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Group_LBP_LMM}
+## Linear mixed model with interaction
+LBP_model <- LBP_long %>%
+  lmerTest::lmer(LBP ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+LBP_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_LBP_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(LBP_model)
+
+## Check normality of residuals
+performance::check_normality(LBP_model)
+```
+
+Log transform data as residuals violated normality. 
+
+### Log Transformation
+
+```{r Group_LBP_log_transform}
+## long data frame and log transform LBP
+LBP_long_log <- data %>%
+  dplyr::select(UIN, Group, LBP_Pre, LBP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = LBP_Pre,
+                Post = LBP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "LBP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(LBP = log(LBP))
+
+head(LBP_long_log)
+```
+
+#### Histogram 
+
+```{r Group_LBP_log_histogram}
+ggplot(LBP_long_log, aes(x = LBP, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of LBP by Group and Timepoint",
+       x = "LBP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Group_LBP_log_qqplot}
+ggplot(LBP_long_log, aes(sample = LBP)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of LBP by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_LBP_log_normality}
+LBP_long_log %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(LBP)$statistic,
+    SW_pval = format(shapiro.test(LBP)$p.value, scientific = FALSE),
+    skewness = skewness(LBP, na.rm = TRUE),
+    kurtosis = kurtosis(LBP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Group_LBP_descriptives_log}
+LBP_wide_log <- LBP_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = LBP)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = LBP_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Group_LBP_LMM_log}
+## Linear mixed model with interaction
+LBP_log_model <- LBP_long_log %>%
+  lmerTest::lmer(LBP ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+LBP_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_LBP_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(LBP_log_model)
+
+## Check normality of residuals
+performance::check_normality(LBP_log_model)
+```
+
+#### ANOVA
+
+```{r Group_LBP_log_LMM_res}
+## Run through anova
+res <- LBP_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Group_LBP_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(LBP_log_model, list(pairwise ~ Timepoint:Group), adjust = "holm")
+emm$`emmeans of Timepoint, Group`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Group`)
+
+## Effect size for main (Timepoint and Group) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Group
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+
+```{r Group_LBP_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+LBP_ann <- 
+  "LMM: Conditional *R*^2^ = 0.982, Marginal *R*^2^ = 0.017<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 0.090, *p* = 0.765, *η*^2^<sub>*p*</sub> = < 0.01<br>
+Group: *F*<sub>(1, 58)</sub> = 0.998, *p* = 0.322, *η*^2^<sub>*p*</sub> = 0.02<br>
+Interaction: *F*<sub>(1, 57)</sub> = 0.737, *p* = 0.394, *η*^2^<sub>*p*</sub> = 0.01"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Group_LBP_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+LBP_long_log <- LBP_long_log %>%
+  dplyr::mutate(GroupTimepoint = factor(interaction(Group, Timepoint), 
+                                         levels = c("Control.Pre", 
+                                                    "Control.Post", 
+                                                    "Patient.Pre", 
+                                                    "Patient.Post")))
+
+group_LBP_log_fig <- LBP_long_log %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = LBP,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(LBP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(LBP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = LBP_axis_log) +
+  scale_y_continuous(breaks = seq(-2, 2, 0.5), 
+                     limits = c(-2, 2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+group_LBP_log_fig
+```
+
+#### Add emmeans
+
+``` {r Group_LBP_log_emm_fig, fig.height = 5, fig.width = 7}
+# emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Group = c(emmeans_se$Group[1], emmeans_se$Group[2], emmeans_se$Group[3], emmeans_se$Group[4]),
+  LBP = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create GroupTimepoint interaction column
+emm_data$GroupTimepoint <- factor(interaction(emm_data$Group, emm_data$Timepoint),
+                                  levels = c("Control.Pre", "Control.Post",
+                                             "Patient.Pre", "Patient.Post"))
+
+## Now merge data
+LBP_long_log_merged <- merge(LBP_long_log, emm_data, by = c("GroupTimepoint", "Group", "Timepoint"))
+
+## Plot
+group_LBP_log_emm_fig <- LBP_long_log_merged %>%
+  ggplot(aes(x = GroupTimepoint,
+             y = LBP.x,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean,
+               geom = "point",
+               color = "black",
+               size = 3,
+               position = position_nudge(x = ifelse(LBP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd,
+               geom = "errorbar",
+               color = "black",
+               width = 0.15,
+               position = position_nudge(x = ifelse(LBP_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = LBP.y, shape = "emm ± SE"),
+             color = "#5b5b5b",
+             size = 3,
+             position = position_nudge(x = ifelse(LBP_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"),
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = LBP.y - SE,
+                    ymax = LBP.y + SE),
+                position = position_nudge(x = ifelse(LBP_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"),
+                                                     -0.4, 0.4), y = 0),
+                width = 0.15,
+                color = "#5b5b5b") +
+  labs(y = LBP_axis_log) +
+  scale_y_continuous(breaks = seq(-2, 2, 0.5), 
+                     limits = c(-2, 2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("",
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(shape = guide_legend(override.aes = list(size = 3)))
+
+group_LBP_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Group_LBP_title_fig, fig.height = 6, fig.width = 7}
+## add LBP_ann title to the plot
+group_LBP_log_emm_title_fig <- group_LBP_log_emm_fig +
+  labs(title = LBP_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+group_LBP_log_emm_title_fig
+```
+
+## Soluble Cluster of Differentiation 14
+
+### Data Frame 
+
+``` {r Group_CD14_long_format}
+## long data frame
+CD14_long <- data %>%
+  dplyr::select(UIN, Group, CD14_Pre, CD14_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CD14_Pre,
+                Post = CD14_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "CD14") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(CD14_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Group_CD14_histogram}
+ggplot(CD14_long, aes(x = CD14, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of sCD14 by Group and Timepoint",
+       x = "sCD14",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Group_CD14_qqplot}
+ggplot(CD14_long, aes(sample = CD14)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of sCD14 by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_CD14_normality}
+CD14_long %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CD14)$statistic,
+    SW_pval = format(shapiro.test(CD14)$p.value, scientific = FALSE),
+    skewness = skewness(CD14, na.rm = TRUE),
+    kurtosis = kurtosis(CD14, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Group_CD14_descriptives}
+## Create wide data frame
+CD14_wide <- CD14_long %>%
+  pivot_wider(names_from = Timepoint, values_from = CD14)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = CD14_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Group_CD14_LMM}
+## Linear mixed model with interaction
+CD14_model <- CD14_long %>%
+  lmerTest::lmer(CD14 ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CD14_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_CD14_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CD14_model)
+
+## Check normality of residuals
+performance::check_normality(CD14_model)
+```
+
+Run on raw data.
+
+#### ANOVA
+
+```{r Group_CD14_LMM_res}
+## Run through anova
+res <- CD14_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Group_CD14_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(CD14_model, list(pairwise ~ Timepoint:Group), adjust = "holm")
+emm$`emmeans of Timepoint, Group`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Group`)
+
+## Effect size for main (Timepoint and Group) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Group
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+
+```{r Group_CD14_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+CD14_ann <-
+  "LMM: Conditional *R*^2^ = 0.804, Marginal *R*^2^ = 0.038<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 0.741, *p* = 0.393, *η*^2^<sub>*p*</sub> = 0.01<br>
+Group: *F*<sub>(1, 58)</sub> = 2.393, *p* = 0.127, *η*^2^<sub>*p*</sub> = 0.04<br>
+Interaction: *F*<sub>(1, 57)</sub> = 0.151, *p* = 0.699, *η*^2^<sub>*p*</sub> = <0.01"
+```
+
+### Figure
+
+#### Raw Data
+
+Plot with pairwise lines:
+
+``` {r Group_CD14_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+CD14_long <- CD14_long %>%
+  dplyr::mutate(GroupTimepoint = factor(interaction(Group, Timepoint), 
+                                         levels = c("Control.Pre", 
+                                                    "Control.Post", 
+                                                    "Patient.Pre", 
+                                                    "Patient.Post")))
+
+set.seed(123)
+group_CD14_fig <- CD14_long %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = CD14,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(CD14_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(CD14_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = CD14_axis) +
+  scale_y_continuous(breaks = seq(0, 3, 0.5), 
+                     limits = c(0, 3),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+group_CD14_fig
+```
+
+#### Add emmeans
+
+``` {r Group_CD14_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Group = c(emmeans_se$Group[1], emmeans_se$Group[2], emmeans_se$Group[3], emmeans_se$Group[4]),
+  CD14 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create GroupTimepoint interaction column
+emm_data$GroupTimepoint <- factor(interaction(emm_data$Group, emm_data$Timepoint),
+                                  levels = c("Control.Pre", "Control.Post",
+                                             "Patient.Pre", "Patient.Post"))
+
+## Now merge data
+CD14_long_merged <- merge(CD14_long, emm_data, by = c("GroupTimepoint", "Group", "Timepoint"))
+
+## Plot
+group_CD14_emm_fig <- CD14_long_merged %>%
+  ggplot(aes(x = GroupTimepoint,
+             y = CD14.x,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean,
+               geom = "point",
+               color = "black",
+               size = 3,
+               position = position_nudge(x = ifelse(CD14_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd,
+               geom = "errorbar",
+               color = "black",
+               width = 0.15,
+               position = position_nudge(x = ifelse(CD14_long$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = CD14.y, shape = "emm ± SE"),
+             color = "#5b5b5b",
+             size = 3,
+             position = position_nudge(x = ifelse(CD14_long_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"),
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = CD14.y - SE,
+                    ymax = CD14.y + SE),
+                position = position_nudge(x = ifelse(CD14_long_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"),
+                                                     -0.4, 0.4), y = 0),
+                width = 0.15,
+                color = "#5b5b5b") +
+  labs(y = CD14_axis) +
+  scale_y_continuous(breaks = seq(0, 3, 0.5), 
+                     limits = c(0, 3),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("",
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(shape = guide_legend(override.aes = list(size = 3)))
+
+group_CD14_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Group_CD14_title_fig, fig.height = 6, fig.width = 7}
+## add CD14_ann title to the plot
+group_CD14_emm_title_fig <- group_CD14_emm_fig +
+  labs(title = CD14_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+group_CD14_emm_title_fig
+```
+
+## Interleukin 6
+
+### Data Frame 
+
+``` {r Group_IL6_long_format}
+## long data frame
+IL6_long <- data %>%
+  dplyr::select(UIN, Group, IL6_Pre, IL6_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IL6_Pre,
+                Post = IL6_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "IL6") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(IL6_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Group_IL6_histogram}
+## Visuals
+## Histogram
+ggplot(IL6_long, aes(x = IL6, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of IL-6 by Group and Timepoint",
+       x = "IL-6",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Group_IL6_qqplot}
+ggplot(IL6_long, aes(sample = IL6)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of IL-6 by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_IL6_normality}
+IL6_long %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IL6)$statistic,
+    SW_pval = format(shapiro.test(IL6)$p.value, scientific = FALSE),
+    skewness = skewness(IL6, na.rm = TRUE),
+    kurtosis = kurtosis(IL6, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Group_IL6_descriptives}
+## Create wide data frame
+IL6_wide <- IL6_long %>%
+  pivot_wider(names_from = Timepoint, values_from = IL6)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = IL6_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Group_IL6_LMM}
+## Linear mixed model with interaction
+IL6_model <- IL6_long %>%
+  lmerTest::lmer(IL6 ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IL6_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_IL6_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IL6_model)
+
+## Check normality of residuals
+performance::check_normality(IL6_model)
+```
+
+Run on log transformed data.
+
+### Log Transformation
+
+```{r Group_IL6_log_transform}
+## long data frame and log transform IL6
+IL6_long_log <- data %>%
+  dplyr::select(UIN, Group, IL6_Pre, IL6_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IL6_Pre,
+                Post = IL6_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Group),
+                      names_to = "Timepoint",
+                      values_to = "IL6") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(IL6 = log(IL6))
+
+head(IL6_long_log)
+```
+
+#### Histogram 
+
+```{r Group_IL6_log_histogram}
+ggplot(IL6_long_log, aes(x = IL6, fill = Group)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "Histogram of IL-6 by Group and Timepoint",
+       x = "IL-6",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Group_IL6_log_qqplot}
+ggplot(IL6_long_log, aes(sample = IL6)) +
+  stat_qq(aes(color = Group), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Group ~ Timepoint) +
+  labs(title = "QQ Plot of IL-6 by Group and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Group_IL6_log_normality}
+IL6_long_log %>%
+  group_by(Group, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IL6)$statistic,
+    SW_pval = format(shapiro.test(IL6)$p.value, scientific = FALSE),
+    skewness = skewness(IL6, na.rm = TRUE),
+    kurtosis = kurtosis(IL6, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Group_IL6_descriptives_log}
+IL6_wide_log <- IL6_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = IL6)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Group,
+    data = IL6_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Group_IL6_LMM_log}
+## Linear mixed model with interaction
+IL6_log_model <- IL6_long_log %>%
+  lmerTest::lmer(IL6 ~ Timepoint + Group + Timepoint:Group + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IL6_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Group_IL6_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IL6_log_model)
+
+## Check normality of residuals
+performance::check_normality(IL6_log_model)
+```
+
+#### ANOVA
+
+```{r Group_IL6_LMM_log_res}
+## Run through anova
+res <- IL6_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Group_IL6_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(IL6_log_model, list(pairwise ~ Timepoint:Group), adjust = "holm")
+emm$`emmeans of Timepoint, Group`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Group`)
+
+## Effect size for main (Timepoint and Group) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Group
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Group_IL6_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+IL6_ann <- 
+  "LMM: Conditional *R*^2^ = 0.784, Marginal *R*^2^ = 0.661<br>
+Timepoint: *F*<sub>(1, 56)</sub> = 347.364, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.86<br>
+Group: *F*<sub>(1, 56)</sub> = 0.032, *p* = 0.859, *η*^2^<sub>*p*</sub> = <0.01<br>
+Interaction: *F*<sub>(1, 56)</sub> = 0.794, *p* = 0.377, *η*^2^<sub>*p*</sub> = 0.01"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Group_IL6_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+IL6_long_log <- IL6_long_log %>%
+  dplyr::mutate(GroupTimepoint = factor(interaction(Group, Timepoint), 
+                                         levels = c("Control.Pre", 
+                                                    "Control.Post", 
+                                                    "Patient.Pre", 
+                                                    "Patient.Post")))
+
+group_IL6_log_fig <- IL6_long_log %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = IL6,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IL6_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IL6_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(y = IL6_axis_log) +
+  scale_y_continuous(breaks = seq(-3, 3, 1),
+                     limits = c(-3, 3.2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+group_IL6_log_fig
+```
+
+#### Add emmeans
+
+``` {r Group_IL6_log_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Group = c(emmeans_se$Group[1], emmeans_se$Group[2], emmeans_se$Group[3], emmeans_se$Group[4]),
+  IL6 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create GroupTimepoint interaction column
+emm_data$GroupTimepoint <- factor(interaction(emm_data$Group, emm_data$Timepoint),
+                                  levels = c("Control.Pre", "Control.Post",
+                                             "Patient.Pre", "Patient.Post"))
+
+## Now merge data
+IL6_long_log_merged <- merge(IL6_long_log, emm_data, by = c("GroupTimepoint", "Group", "Timepoint"))
+
+## Plot
+group_IL6_log_emm_fig <- IL6_long_log_merged %>%
+  ggplot(aes(x = GroupTimepoint, 
+             y = IL6.x,
+             group = GroupTimepoint)) +
+  geom_point(aes(group = UIN, colour = Group), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IL6_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IL6_long_log$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = IL6.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(IL6_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = IL6.y - SE, 
+                    ymax = IL6.y + SE), 
+                position = position_nudge(x = ifelse(IL6_long_log_merged$GroupTimepoint %in% c("Control.Pre", "Patient.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = IL6_axis_log) +
+  scale_y_continuous(breaks = seq(-3, 3, 1),
+                     limits = c(-3, 3.2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Control.Pre", "Control.Post", "Patient.Pre", "Patient.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(shape = guide_legend(override.aes = list(size = 3)))
+
+group_IL6_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Group_IL6_log_title_fig, fig.height = 6, fig.width = 7}
+## add IL6_ann title to the plot
+group_IL6_log_emm_title_fig <- group_IL6_log_emm_fig +
+  labs(title = IL6_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+group_IL6_log_emm_title_fig
+```
+
+## Baseline Markers Only
+
+### Zonulin
+
+#### Descriptives
+
+```{r Group_Zonulin_descriptives}
+jmv::descriptives(
+    formula = Zon_Pre ~ Group,
+    data = data,
+    iqr = TRUE,
+    skew = TRUE,
+    kurt = TRUE,
+    sw = TRUE)
+```
+
+#### Test of Difference
+
+non-parametric data:
+
+```{r Group_Zon_non-parametric}
+jmv::ttestIS(
+    formula = Zon_Pre ~ Group,
+    data = data,
+    vars = Zon_Pre,
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+### C-Reactive Protein
+
+#### Descriptives
+
+```{r Group_CRP_descriptives}
+jmv::descriptives(
+    formula = CRP_Pre ~ Group,
+    data = data,
+    iqr = TRUE,
+    skew = TRUE,
+    kurt = TRUE,
+    sw = TRUE)
+```
+
+#### Test of Difference
+
+non-parametric data:
+
+```{r Group_CRP_non-parametric}
+jmv::ttestIS(
+    formula = CRP_Pre ~ Group,
+    data = data,
+    vars = CRP_Pre,
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+# Heat Tolerance
+
+## IFABP
+
+### Data Frame 
+
+``` {r Outcome_IFABP_long_format}
+## long data frame
+IFABP_long <- data %>%
+  dplyr::select(UIN, Outcome, IFABP_Pre, IFABP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IFABP_Pre,
+                Post = IFABP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "IFABP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(IFABP_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Outcome_IFABP_histogram}
+ggplot(IFABP_long, aes(x = IFABP, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of I-FABP by Outcome and Timepoint",
+       x = "I-FABP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_IFABP_qqplot}
+ggplot(IFABP_long, aes(sample = IFABP)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of I-FABP by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_IFABP_normality}
+IFABP_long %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IFABP)$statistic,
+    SW_pval = format(shapiro.test(IFABP)$p.value, scientific = FALSE),
+    skewness = skewness(IFABP, na.rm = TRUE),
+    kurtosis = kurtosis(IFABP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Outcome_IFABP_descriptives}
+## Create wide data frame
+IFABP_wide <- IFABP_long %>%
+  pivot_wider(names_from = Timepoint, values_from = IFABP)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = IFABP_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Outcome_IFABP_LMM}
+## Linear mixed model with interaction
+IFABP_model <- IFABP_long %>%
+  lmerTest::lmer(IFABP ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IFABP_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_IFABP_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IFABP_model)
+
+## Check normality of residuals
+performance::check_normality(IFABP_model)
+```
+
+Run on log transformed data.
+
+### Log Transformation
+
+```{r Outcome_IFABP_log_transform}
+## long data frame and log transform IFABP
+IFABP_long_log <- data %>%
+  dplyr::select(UIN, Outcome, IFABP_Pre, IFABP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IFABP_Pre,
+                Post = IFABP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "IFABP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(IFABP = log(IFABP))
+
+head(IFABP_long_log)
+```
+
+#### Histogram 
+
+```{r Outcome_IFABP_log_histogram}
+ggplot(IFABP_long_log, aes(x = IFABP, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of I-FABP by Outcome and Timepoint",
+       x = "I-FABP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Outcome_IFABP_log_qqplot}
+ggplot(IFABP_long_log, aes(sample = IFABP)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of I-FABP by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_IFABP_log_normality}
+IFABP_long_log %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IFABP)$statistic,
+    SW_pval = format(shapiro.test(IFABP)$p.value, scientific = FALSE),
+    skewness = skewness(IFABP, na.rm = TRUE),
+    kurtosis = kurtosis(IFABP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_IFABP_descriptives_log}
+IFABP_wide_log <- IFABP_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = IFABP)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = IFABP_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Outcome_IFABP_LMM_log}
+## Linear mixed model with interaction
+IFABP_log_model <- IFABP_long_log %>%
+  lmerTest::lmer(IFABP ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IFABP_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_IFABP_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IFABP_log_model)
+
+## Check normality of residuals
+performance::check_normality(IFABP_log_model)
+```
+
+#### ANOVA
+
+```{r Outcome_IFABP_LMM_log_res}
+## Run through anova
+res <- IFABP_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Outcome_IFABP_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(IFABP_log_model, list(pairwise ~ Timepoint:Outcome), adjust = "holm")
+emm$`emmeans of Timepoint, Outcome`
+
+## emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Outcome`)
+
+## Effect size for main (Timepoint and Outcome) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Outcome
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Outcome_IFABP_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+IFABP_ann <- 
+  "LMM: Conditional *R*^2^ = 0.842, Marginal *R*^2^ = 0.144<br>
+Timepoint: *F*<sub>(1, 58)</sub> = 61.965, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.52<br>
+Group: *F*<sub>(1, 59)</sub> = 1.585, *p* = 0.213, *η*^2^<sub>*p*</sub> = 0.03<br>
+Interaction: *F*<sub>(1, 58)</sub> = 0.838, *p* = 0.364, *η*^2^<sub>*p*</sub> = 0.01"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Outcome_IFABP_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+IFABP_long_log <- IFABP_long_log %>%
+  dplyr::mutate(OutcomeTimepoint = factor(interaction(Outcome, Timepoint), 
+                                         levels = c("Tolerant.Pre",
+                                                    "Tolerant.Post",
+                                                    "Intolerant.Pre",
+                                                    "Intolerant.Post")))
+
+outcome_IFABP_log_fig <- IFABP_long_log %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = IFABP,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IFABP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IFABP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = IFABP_axis_log) +
+  scale_y_continuous(breaks = seq(0, 9, 1),
+                     limits = c(0, 9),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+outcome_IFABP_log_fig
+```
+
+#### Add emmeans
+
+``` {r Outcome_IFABP_log_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Outcome = c(emmeans_se$Outcome[1], emmeans_se$Outcome[2], emmeans_se$Outcome[3], emmeans_se$Outcome[4]),
+  IFABP = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create OutcomeTimepoint interaction column
+emm_data$OutcomeTimepoint <- factor(interaction(emm_data$Outcome, emm_data$Timepoint),
+                                  levels = c("Tolerant.Pre","Tolerant.Post",
+                                             "Intolerant.Pre","Intolerant.Post"))
+
+## Now merge data
+IFABP_long_log_merged <- merge(IFABP_long_log, emm_data, by = c("OutcomeTimepoint", "Outcome", "Timepoint"))
+
+## Plot
+outcome_IFABP_log_emm_fig <- IFABP_long_log_merged %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = IFABP.x,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"),
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IFABP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IFABP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = IFABP.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(IFABP_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = IFABP.y - SE, 
+                    ymax = IFABP.y + SE), 
+                position = position_nudge(x = ifelse(IFABP_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = IFABP_axis_log) +
+  scale_y_continuous(breaks = seq(0, 9, 1),
+                     limits = c(0, 9),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(color = guide_legend(order = 1),  ## Set Outcome legend as 1st so it appears on top of estimates legend
+         shape = guide_legend(order = 2, override.aes = list(size = 3)))  ## Set estimates legend to 2nd
+
+outcome_IFABP_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Outcome_IFABP_log_emm_title_fig, fig.height = 6, fig.width = 7}
+## add ifabp_ann title to the plot
+outcome_IFABP_log_emm_title_fig <- outcome_IFABP_log_emm_fig +
+  labs(title = IFABP_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+outcome_IFABP_log_emm_title_fig
+```
+
+## Claudin 3
+
+### Data Frame 
+
+``` {r Outcome_CLDN3_long_format}
+## long data frame
+CLDN3_long <- data %>%
+  dplyr::select(UIN, Outcome, CLDN3_Pre, CLDN3_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CLDN3_Pre,
+                Post = CLDN3_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "CLDN3") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(CLDN3_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Outcome_CLDN3_histogram}
+ggplot(CLDN3_long, aes(x = CLDN3, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of Claudin 3 by Outcome and Timepoint",
+       x = "Claudin 3",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_CLDN3_qqplot}
+ggplot(CLDN3_long, aes(sample = CLDN3)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of Claudin 3 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_CLDN3_normality}
+CLDN3_long %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CLDN3)$statistic,
+    SW_pval = format(shapiro.test(CLDN3)$p.value, scientific = FALSE),
+    skewness = skewness(CLDN3, na.rm = TRUE),
+    kurtosis = kurtosis(CLDN3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Outcome_CLDN3_descriptives}
+## Create wide data frame
+CLDN3_wide <- CLDN3_long %>%
+  pivot_wider(names_from = Timepoint, values_from = CLDN3)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = CLDN3_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Outcome_CLDN3_LMM}
+## Linear mixed model with interaction
+CLDN3_model <- CLDN3_long %>%
+  lmerTest::lmer(CLDN3 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CLDN3_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_CLDN3_LMM_performance_raw, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CLDN3_model)
+
+## Check normality of residuals
+performance::check_normality(CLDN3_model)
+```
+
+Log transform data.
+
+### Log Transformation
+
+```{r Outcome_CLDN3_log_transform}
+## long data frame and log transform CLDN3
+CLDN3_long_log <- data %>%
+  dplyr::select(UIN, Outcome, CLDN3_Pre, CLDN3_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CLDN3_Pre,
+                Post = CLDN3_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "CLDN3") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(CLDN3 = log(CLDN3))
+
+head(CLDN3_long_log)
+```
+
+#### Histogram 
+
+```{r Outcome_CLDN3_log_histogram}
+ggplot(CLDN3_long_log, aes(x = CLDN3, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of Claudin 3 by Outcome and Timepoint",
+       x = "Claudin 3",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Outcome_CLDN3_log_qqplot}
+ggplot(CLDN3_long_log, aes(sample = CLDN3)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of Claudin 3 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_CLDN3_log_normality}
+CLDN3_long_log %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CLDN3)$statistic,
+    SW_pval = format(shapiro.test(CLDN3)$p.value, scientific = FALSE),
+    skewness = skewness(CLDN3, na.rm = TRUE),
+    kurtosis = kurtosis(CLDN3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_CLDN3_descriptives_log}
+CLDN3_wide_log <- CLDN3_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = CLDN3)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = CLDN3_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Outcome_CLDN3_LMM_log}
+## Linear mixed model with interaction
+CLDN3_log_model <- CLDN3_long_log %>%
+  lmerTest::lmer(CLDN3 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CLDN3_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_CLDN3_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CLDN3_log_model)
+
+## Check normality of residuals
+performance::check_normality(CLDN3_log_model)
+```
+
+Try Box-Cox. 
+
+### Box-Cox Transformation
+
+```{r Outcome_CLDN3_boxcox_transform}
+## load maxlam object from separate script
+load(paste0(analysis_dir, "/maxlam_outcome_CLDN3_boxcox.RData"))
+## View
+maxlam
+## lambda value
+lambda <- 0.6
+## Create data frame for boxcox transformation
+CLDN3_long_boxcox <- CLDN3_long
+## apply transformation 
+CLDN3_long_boxcox$CLDN3 <- ((CLDN3_long$CLDN3^lambda - 1)/lambda)
+
+head(CLDN3_long_boxcox)
+```
+
+#### Histogram 
+
+```{r Outcome_CLDN3_boxcox_histogram}
+ggplot(CLDN3_long_boxcox, aes(x = CLDN3, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of Claudin 3 by Outcome and Timepoint",
+       x = "Claudin 3",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_CLDN3_boxcox_qqplot}
+ggplot(CLDN3_long_boxcox, aes(sample = CLDN3)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of Claudin 3 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_CLDN3_boxcox_normality}
+CLDN3_long_boxcox %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CLDN3)$statistic,
+    SW_pval = format(shapiro.test(CLDN3)$p.value, scientific = FALSE),
+    skewness = skewness(CLDN3, na.rm = TRUE),
+    kurtosis = kurtosis(CLDN3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_CLDN3_descriptives_boxcox}
+CLDN3_wide_boxcox <- CLDN3_long_boxcox %>%
+  pivot_wider(names_from = Timepoint, values_from = CLDN3)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = CLDN3_wide_boxcox,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Box-Cox Data
+
+```{r Outcome_CLDN3_boxcox_LMM}
+## Linear mixed model with interaction
+CLDN3_boxcox_model <- CLDN3_long_boxcox %>%
+  lmerTest::lmer(CLDN3 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CLDN3_boxcox_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_CLDN3_LMM_performance_boxcox, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CLDN3_boxcox_model)
+
+## Check normality of residuals
+performance::check_normality(CLDN3_boxcox_model)
+```
+
+Try square root. 
+
+### Square Root Transformation
+
+```{r Outcome_CLDN3_sqrt_transform}
+## long data frame and log transform CLDN3
+CLDN3_long_sqrt <- data %>%
+  dplyr::select(UIN, Outcome, CLDN3_Pre, CLDN3_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CLDN3_Pre,
+                Post = CLDN3_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "CLDN3") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(CLDN3 = sqrt(CLDN3))
+
+head(CLDN3_long_sqrt)
+```
+
+#### Histogram 
+
+```{r Outcome_CLDN3_sqrt_histogram}
+ggplot(CLDN3_long_sqrt, aes(x = CLDN3, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of Claudin 3 by Outcome and Timepoint",
+       x = "Claudin 3",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Outcome_CLDN3_sqrt_qqplot}
+ggplot(CLDN3_long_sqrt, aes(sample = CLDN3)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of Claudin 3 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_CLDN3_sqrt_normality}
+CLDN3_long_sqrt %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CLDN3)$statistic,
+    SW_pval = format(shapiro.test(CLDN3)$p.value, scientific = FALSE),
+    skewness = skewness(CLDN3, na.rm = TRUE),
+    kurtosis = kurtosis(CLDN3, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_CLDN3_descriptives_sqrt}
+CLDN3_wide_sqrt <- CLDN3_long_sqrt %>%
+  pivot_wider(names_from = Timepoint, values_from = CLDN3)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = CLDN3_wide_sqrt,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+#### Square Root Data
+
+```{r Outcome_CLDN3_sqrt_LMM}
+## Linear mixed model with interaction
+CLDN3_sqrt_model <- CLDN3_long_sqrt %>%
+  lmerTest::lmer(CLDN3 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CLDN3_sqrt_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_CLDN3_LMM_performance_sqrt, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CLDN3_sqrt_model)
+
+## Check normality of residuals
+performance::check_normality(CLDN3_sqrt_model)
+```
+
+### Linear Mixed Model
+
+After multiple log transformation attempts, residuals still violated normality. Given the context of this sub-analysis, we will continue with using the raw data but will ensure we highlight the potential bias of this model. 
+https://thestatsgeek.com/2014/08/17/robustness-of-linear-mixed-models/  
+https://besjournals.onlinelibrary.wiley.com/doi/full/10.1111/2041-210X.13434  
+
+#### ANOVA
+
+```{r Outcome_CLDN3_LMM_res}
+## Run through anova
+res <- CLDN3_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Outcome_CLDN3_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(CLDN3_model, list(pairwise ~ Timepoint:Outcome), adjust = "holm")
+emm$`emmeans of Timepoint, Outcome`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Outcome`)
+
+## Effect size for main (Timepoint and Outcome) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Outcome
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Outcome_CLDN3_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+CLDN3_ann <-
+  "LMM: Conditional *R*^2^ = 0.781, Marginal *R*^2^ = 0.068<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 24.456, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.30<br>
+Group: *F*<sub>(1, 58)</sub> = 0.177, *p* = 0.675, *η*^2^<sub>*p*</sub> = <0.01<br>
+Interaction: *F*<sub>(1, 57)</sub> = 0.381, *p* = 0.539, *η*^2^<sub>*p*</sub> = 0.01"
+```
+
+### Figure
+
+#### Raw Data
+
+Plot with pairwise lines:
+
+``` {r Outcome_CLDN3_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+CLDN3_long <- CLDN3_long %>%
+  dplyr::mutate(OutcomeTimepoint = factor(interaction(Outcome, Timepoint),
+                                         levels = c("Tolerant.Pre",
+                                                    "Tolerant.Post",
+                                                    "Intolerant.Pre",
+                                                    "Intolerant.Post")))
+
+outcome_CLDN3_fig <- CLDN3_long %>%
+  ggplot(aes(x = OutcomeTimepoint,
+             y = CLDN3,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"),
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean,
+               geom = "point",
+               color = "black",
+               size = 3,
+               position = position_nudge(x = ifelse(CLDN3_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd,
+               geom = "errorbar",
+               color = "black",
+               width = 0.15,
+               position = position_nudge(x = ifelse(CLDN3_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = CLDN3_axis) +
+  scale_y_continuous(breaks = seq(0, 15, 2),
+                     limits = c(0, 15),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("",
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+outcome_CLDN3_fig
+```
+
+#### Add emmeans
+
+``` {r Outcome_CLDN3_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Outcome = c(emmeans_se$Outcome[1], emmeans_se$Outcome[2], emmeans_se$Outcome[3], emmeans_se$Outcome[4]),
+  CLDN3 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create OutcomeTimepoint interaction column
+emm_data$OutcomeTimepoint <- factor(interaction(emm_data$Outcome, emm_data$Timepoint),
+                                  levels = c("Tolerant.Pre","Tolerant.Post",
+                                             "Intolerant.Pre","Intolerant.Post"))
+
+## Now merge data
+CLDN3_long_merged <- merge(CLDN3_long, emm_data, by = c("OutcomeTimepoint", "Outcome", "Timepoint"))
+
+## Plot
+outcome_CLDN3_emm_fig <- CLDN3_long_merged %>%
+  ggplot(aes(x = OutcomeTimepoint,
+             y = CLDN3.x,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome),
+             linewidth = 0.3,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"),
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean,
+               geom = "point",
+               color = "black",
+               size = 3,
+               position = position_nudge(x = ifelse(CLDN3_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd,
+               geom = "errorbar",
+               color = "black",
+               width = 0.15,
+               position = position_nudge(x = ifelse(CLDN3_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = CLDN3.y, shape = "emm ± SE"),
+             color = "#5b5b5b",
+             size = 3,
+             position = position_nudge(x = ifelse(CLDN3_long_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = CLDN3.y - SE,
+                    ymax = CLDN3.y + SE),
+                position = position_nudge(x = ifelse(CLDN3_long_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                     -0.4, 0.4), y = 0),
+                width = 0.15,
+                color = "#5b5b5b") +
+  labs(y = CLDN3_axis) +
+  scale_y_continuous(breaks = seq(0, 15, 2),
+                     limits = c(0, 15),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("",
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(color = guide_legend(order = 1),  ## Set Outcome legend as 1st so it appears on top of estimates legend
+         shape = guide_legend(order = 2, override.aes = list(size = 3)))  ## Set estimates legend to 2nd
+
+outcome_CLDN3_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Outcome_CLDN3_title_fig, fig.height = 6, fig.width = 7}
+## add CLDN3_ann title to the plot
+outcome_CLDN3_emm_title_fig <- outcome_CLDN3_emm_fig +
+  labs(title = CLDN3_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+outcome_CLDN3_emm_title_fig
+```
+
+## Lipopolysaccharide Binding Protein
+
+### Data Frame 
+
+``` {r Outcome_LBP_long_format}
+## long data frame
+LBP_long <- data %>%
+  dplyr::select(UIN, Outcome, LBP_Pre, LBP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = LBP_Pre,
+                Post = LBP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "LBP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(LBP_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Outcome_LBP_histogram}
+ggplot(LBP_long, aes(x = LBP, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of LBP by Outcome and Timepoint",
+       x = "LBP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_LBP_qqplot}
+ggplot(LBP_long, aes(sample = LBP)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of LBP by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_LBP_normality}
+LBP_long %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(LBP)$statistic,
+    SW_pval = format(shapiro.test(LBP)$p.value, scientific = FALSE),
+    skewness = skewness(LBP, na.rm = TRUE),
+    kurtosis = kurtosis(LBP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Outcome_LBP_descriptives}
+## Create wide data frame
+LBP_wide <- LBP_long %>%
+  pivot_wider(names_from = Timepoint, values_from = LBP)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = LBP_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Outcome_LBP_LMM}
+## Linear mixed model with interaction
+LBP_model <- LBP_long %>%
+  lmerTest::lmer(LBP ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+LBP_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_LBP_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(LBP_model)
+
+## Check normality of residuals
+performance::check_normality(LBP_model)
+```
+
+Log transform data as residuals violated normality. 
+
+### Log Transformation
+
+```{r Outcome_LBP_log_transform}
+## long data frame and log transform LBP
+LBP_long_log <- data %>%
+  dplyr::select(UIN, Outcome, LBP_Pre, LBP_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = LBP_Pre,
+                Post = LBP_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "LBP") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(LBP = log(LBP))
+
+head(LBP_long_log)
+```
+
+#### Histogram 
+
+```{r Outcome_LBP_log_histogram}
+ggplot(LBP_long_log, aes(x = LBP, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of LBP by Outcome and Timepoint",
+       x = "LBP",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Outcome_LBP_log_qqplot}
+ggplot(LBP_long_log, aes(sample = LBP)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of LBP by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_LBP_log_normality}
+LBP_long_log %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(LBP)$statistic,
+    SW_pval = format(shapiro.test(LBP)$p.value, scientific = FALSE),
+    skewness = skewness(LBP, na.rm = TRUE),
+    kurtosis = kurtosis(LBP, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_LBP_descriptives_log}
+LBP_wide_log <- LBP_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = LBP)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = LBP_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Outcome_LBP_LMM_log}
+## Linear mixed model with interaction
+LBP_log_model <- LBP_long_log %>%
+  lmerTest::lmer(LBP ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+LBP_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_LBP_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(LBP_log_model)
+
+## Check normality of residuals
+performance::check_normality(LBP_log_model)
+```
+
+Run on log transformed data. 
+
+#### ANOVA
+
+```{r Outcome_LBP_log_LMM_res}
+## Run through anova
+res <- LBP_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Outcome_LBP_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(LBP_log_model, list(pairwise ~ Timepoint:Outcome), adjust = "holm")
+emm$`emmeans of Timepoint, Outcome`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Outcome`)
+
+## Effect size for main (Timepoint and Outcome) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Outcome
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Outcome_LBP_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+LBP_ann <-
+  "LMM: Conditional *R*^2^ = 0.983, Marginal *R*^2^ = <0.001<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 1.506, *p* = 0.225, *η*^2^<sub>*p*</sub> = 0.03<br>
+Group: *F*<sub>(1, 58)</sub> = <0.001, *p* = 0.989, *η*^2^<sub>*p*</sub> = <0.01<br>
+Interaction: *F*<sub>(1, 57)</sub> = 2.638, *p* = 0.110, *η*^2^<sub>*p*</sub> = 0.04"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Outcome_LBP_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+LBP_long_log <- LBP_long_log %>%
+  dplyr::mutate(OutcomeTimepoint = factor(interaction(Outcome, Timepoint), 
+                                         levels = c("Tolerant.Pre",
+                                                    "Tolerant.Post",
+                                                    "Intolerant.Pre",
+                                                    "Intolerant.Post")))
+
+outcome_LBP_log_fig <- LBP_long_log %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = LBP,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(LBP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(LBP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = LBP_axis_log) +
+  scale_y_continuous(breaks = seq(-2, 2, 0.5), 
+                     limits = c(-2, 2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+outcome_LBP_log_fig
+```
+
+#### Add emmeans
+
+``` {r Outcome_LBP_log_emm_fig, fig.height = 5, fig.width = 7}
+# emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Outcome = c(emmeans_se$Outcome[1], emmeans_se$Outcome[2], emmeans_se$Outcome[3], emmeans_se$Outcome[4]),
+  LBP = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create OutcomeTimepoint interaction column
+emm_data$OutcomeTimepoint <- factor(interaction(emm_data$Outcome, emm_data$Timepoint),
+                                    levels = c("Tolerant.Pre","Tolerant.Post",
+                                               "Intolerant.Pre","Intolerant.Post"))
+
+## Now merge data
+LBP_long_log_merged <- merge(LBP_long_log, emm_data, by = c("OutcomeTimepoint", "Outcome", "Timepoint"))
+
+## plot
+outcome_LBP_log_emm_fig <- LBP_long_log_merged %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = LBP.x,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(LBP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(LBP_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = LBP.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(LBP_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = LBP.y - SE, 
+                    ymax = LBP.y + SE), 
+                position = position_nudge(x = ifelse(LBP_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = LBP_axis_log) +
+  scale_y_continuous(breaks = seq(-2, 2, 0.5), 
+                     limits = c(-2, 2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(color = guide_legend(order = 1),  ## Set Outcome legend as 1st so it appears on top of estimates legend
+         shape = guide_legend(order = 2, override.aes = list(size = 3)))  ## Set estimates legend to 2nd
+
+outcome_LBP_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Outcome_LBP_log_emm_title_fig, fig.height = 6, fig.width = 7}
+## add LBP_ann title to the plot
+outcome_LBP_log_emm_title_fig <- outcome_LBP_log_emm_fig +
+  labs(title = LBP_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+outcome_LBP_log_emm_title_fig
+```
+
+## Soluble Cluster of Differentiation 14
+
+### Data Frame 
+
+``` {r Outcome_CD14_long_format}
+## long data frame
+CD14_long <- data %>%
+  dplyr::select(UIN, Outcome, CD14_Pre, CD14_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = CD14_Pre,
+                Post = CD14_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "CD14") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(CD14_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Outcome_CD14_histogram}
+ggplot(CD14_long, aes(x = CD14, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of sCD14 by Outcome and Timepoint",
+       x = "sCD14",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_CD14_qqplot}
+ggplot(CD14_long, aes(sample = CD14)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of sCD14 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_CD14_normality}
+CD14_long %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(CD14)$statistic,
+    SW_pval = format(shapiro.test(CD14)$p.value, scientific = FALSE),
+    skewness = skewness(CD14, na.rm = TRUE),
+    kurtosis = kurtosis(CD14, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Outcome_CD14_descriptives}
+## Create wide data frame
+CD14_wide <- CD14_long %>%
+  pivot_wider(names_from = Timepoint, values_from = CD14)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = CD14_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Outcome_CD14_LMM}
+## Linear mixed model with interaction
+CD14_model <- CD14_long %>%
+  lmerTest::lmer(CD14 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+CD14_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_CD14_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(CD14_model)
+
+## Check normality of residuals
+performance::check_normality(CD14_model)
+```
+
+Run on raw data.
+
+#### ANOVA
+
+```{r Outcome_CD14_LMM_res}
+## Run through anova
+res <- CD14_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Outcome_CD14_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(CD14_model, list(pairwise ~ Timepoint:Outcome), adjust = "holm")
+emm$`emmeans of Timepoint, Outcome`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Outcome`)
+
+## Effect size for main (Timepoint and Outcome) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Outcome
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Outcome_CD14_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+CD14_ann <-
+  "LMM: Conditional *R*^2^ = 0.810, Marginal *R*^2^ = 0.094<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 3.661, *p* = 0.061, *η*^2^<sub>*p*</sub> = 0.06<br>
+Group: *F*<sub>(1, 58)</sub> = 6.390, *p* = **0.014**, *η*^2^<sub>*p*</sub> = 0.10<br>
+Interaction: *F*<sub>(1, 57)</sub> = 3.746, *p* = 0.058, *η*^2^<sub>*p*</sub> = 0.06"
+```
+
+### Figure
+
+#### Raw Data
+
+Plot with pairwise lines:
+
+``` {r Outcome_CD14_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+CD14_long <- CD14_long %>%
+  dplyr::mutate(OutcomeTimepoint = factor(interaction(Outcome, Timepoint), 
+                                         levels = c("Tolerant.Pre",
+                                                    "Tolerant.Post", 
+                                                    "Intolerant.Pre",
+                                                    "Intolerant.Post")))
+
+outcome_CD14_fig <- CD14_long %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = CD14,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(CD14_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(CD14_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  labs(y = CD14_axis) +
+  scale_y_continuous(breaks = seq(0, 3, .5), 
+                     limits = c(0, 3),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post", "Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+outcome_CD14_fig
+```
+
+#### Add emmeans
+
+``` {r Outcome_CD14_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Outcome = c(emmeans_se$Outcome[1], emmeans_se$Outcome[2], emmeans_se$Outcome[3], emmeans_se$Outcome[4]),
+  CD14 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create OutcomeTimepoint interaction column
+emm_data$OutcomeTimepoint <- factor(interaction(emm_data$Outcome, emm_data$Timepoint),
+                                  levels = c("Tolerant.Pre","Tolerant.Post",
+                                             "Intolerant.Pre","Intolerant.Post"))
+
+## Now merge data
+CD14_long_merged <- merge(CD14_long, emm_data, by = c("OutcomeTimepoint", "Outcome", "Timepoint"))
+
+## Plot
+outcome_CD14_emm_fig <- CD14_long_merged %>%
+  ggplot(aes(x = OutcomeTimepoint,
+             y = CD14.x,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome),
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"),
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean,
+               geom = "point",
+               color = "black",
+               size = 3,
+               position = position_nudge(x = ifelse(CD14_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd,
+               geom = "errorbar",
+               color = "black",
+               width = 0.15,
+               position = position_nudge(x = ifelse(CD14_long$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = CD14.y, shape = "emm ± SE"),
+             color = "#5b5b5b",
+             size = 3,
+             position = position_nudge(x = ifelse(CD14_long_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = CD14.y - SE,
+                    ymax = CD14.y + SE),
+                position = position_nudge(x = ifelse(CD14_long_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"),
+                                                     -0.4, 0.4), y = 0),
+                width = 0.15,
+                color = "#5b5b5b") +
+  labs(y = CD14_axis) +
+  scale_y_continuous(breaks = seq(0, 3, .5), 
+                     limits = c(0, 3),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("",
+                   limits = c("Tolerant.Pre","Tolerant.Post", "Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(color = guide_legend(order = 1),  ## Set Outcome legend as 1st so it appears on top of estimates legend
+         shape = guide_legend(order = 2, override.aes = list(size = 3)))  ## Set estimates legend to 2nd
+
+outcome_CD14_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Outcome_CD14_emm_pwc_title_fig, fig.height = 6, fig.width = 7}
+## add CD14_ann title to the plot
+outcome_CD14_emm_title_fig <- outcome_CD14_emm_fig +
+  labs(title = CD14_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+outcome_CD14_emm_title_fig
+```
+
+## Interleukin 6
+
+### Data Frame 
+
+``` {r Outcome_IL6_long_format}
+## long data frame
+IL6_long <- data %>%
+  dplyr::select(UIN, Outcome, IL6_Pre, IL6_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IL6_Pre,
+                Post = IL6_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "IL6") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post")))
+
+head(IL6_long)
+```
+
+### Inspect Data
+
+#### Histogram
+
+```{r Outcome_IL6_histogram}
+ggplot(IL6_long, aes(x = IL6, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of IL-6 by Outcome and Timepoint",
+       x = "IL-6",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Q-Q plot
+
+```{r Outcome_IL6_qqplot}
+ggplot(IL6_long, aes(sample = IL6)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of IL-6 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_IL6_normality}
+IL6_long %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IL6)$statistic,
+    SW_pval = format(shapiro.test(IL6)$p.value, scientific = FALSE),
+    skewness = skewness(IL6, na.rm = TRUE),
+    kurtosis = kurtosis(IL6, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives 
+
+```{r Outcome_IL6_descriptives}
+## Create wide data frame
+IL6_wide <- IL6_long %>%
+  pivot_wider(names_from = Timepoint, values_from = IL6)
+
+## Descriptives
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = IL6_wide,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Raw data
+
+```{r Outcome_IL6_LMM}
+## Linear mixed model with interaction
+IL6_model <- IL6_long %>%
+  lmerTest::lmer(IL6 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IL6_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_IL6_LMM_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IL6_model)
+
+## Check normality of residuals
+performance::check_normality(IL6_model)
+```
+
+Run on log transformed data.
+
+### Log Transformation
+
+```{r Outcome_IL6_log_transform}
+## long data frame and log transform IL6
+IL6_long_log <- data %>%
+  dplyr::select(UIN, Outcome, IL6_Pre, IL6_Post) %>%
+  ## Rename timepoints to Pre & Post
+  dplyr::rename(Pre = IL6_Pre,
+                Post = IL6_Post) %>%
+  tidyr::pivot_longer(cols = -c(UIN, Outcome),
+                      names_to = "Timepoint",
+                      values_to = "IL6") %>%
+  dplyr::mutate(Timepoint = factor(Timepoint, levels = c("Pre", "Post"))) %>%
+  dplyr::mutate(IL6 = log(IL6))
+
+head(IL6_long_log)
+```
+
+#### Histogram 
+
+```{r Outcome_IL6_log_histogram}
+ggplot(IL6_long_log, aes(x = IL6, fill = Outcome)) +
+  geom_histogram(position = "identity", alpha = 0.7, bins = 20, color = "black") +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "Histogram of IL-6 by Outcome and Timepoint",
+       x = "IL-6",
+       y = "Frequency") +
+  scale_fill_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+
+#### Q-Q plot
+
+```{r Outcome_IL6_log_qqplot}
+ggplot(IL6_long_log, aes(sample = IL6)) +
+  stat_qq(aes(color = Outcome), alpha = 0.6) +
+  stat_qq_line() +
+  facet_grid(Outcome ~ Timepoint) +
+  labs(title = "QQ Plot of IL-6 by Outcome and Timepoint",
+       x = "Theoretical Quantiles",
+       y = "Sample Quantiles") +
+  scale_colour_manual(values = group_cols) +
+  theme(legend.position = "none")
+```
+
+#### Normality
+
+```{r Outcome_IL6_log_normality}
+IL6_long_log %>%
+  group_by(Outcome, Timepoint) %>%
+  summarise(
+    SW_stat = shapiro.test(IL6)$statistic,
+    SW_pval = format(shapiro.test(IL6)$p.value, scientific = FALSE),
+    skewness = skewness(IL6, na.rm = TRUE),
+    kurtosis = kurtosis(IL6, na.rm = TRUE),
+    .groups = "drop"
+  )
+```
+
+#### Descriptives
+
+Transform to wide data frame and use Jamovi package to provide descriptives
+
+```{r Outcome_IL6_descriptives_log}
+IL6_wide_log <- IL6_long_log %>%
+  pivot_wider(names_from = Timepoint, values_from = IL6)
+
+jmv::descriptives(
+    formula = Pre + Post ~ Outcome,
+    data = IL6_wide_log,
+    ci = TRUE,
+    iqr = TRUE)
+```
+
+### Linear Mixed Model
+
+#### Log Transformed Data
+
+```{r Outcome_IL6_LMM_log}
+## Linear mixed model with interaction
+IL6_log_model <- IL6_long_log %>%
+  lmerTest::lmer(IL6 ~ Timepoint + Outcome + Timepoint:Outcome + (1|UIN),
+       data = .,
+       REML = FALSE)
+
+## Model Summary
+IL6_log_model %>% summary()
+```
+
+#### Model Performance
+
+```{r Outcome_IL6_LMM_log_performance, fig.height = 20, fig.width = 15}
+## Check Model Performance
+performance::model_performance(IL6_log_model)
+
+## Check normality of residuals
+performance::check_normality(IL6_log_model)
+```
+
+#### ANOVA
+
+```{r Outcome_IL6_LMM_log_res}
+## Run through anova
+res <- IL6_log_model %>% anova()
+res
+```
+
+#### Estimated Marginal Means and Effect Size
+
+```{r Outcome_IL6_log_LMM_posthoc}
+## emmeans
+emm <- emmeans::emmeans(IL6_log_model, list(pairwise ~ Timepoint:Outcome), adjust = "holm")
+emm$`emmeans of Timepoint, Outcome`
+
+## save emmeans
+emmeans_se <- summary(emm$`emmeans of Timepoint, Outcome`)
+
+## Effect size for main (Timepoint and Outcome) and interaction effects, take information from "res" which is anova result
+## Timepoint (1: F value, 2: NumDF, 3: DenDF)
+effectsize::F_to_eta2(res$`F value`[1],res$NumDF[1], res$DenDF[1])
+## Outcome
+effectsize::F_to_eta2(res$`F value`[2],res$NumDF[2], res$DenDF[2])
+## Interaction
+effectsize::F_to_eta2(res$`F value`[3],res$NumDF[3], res$DenDF[3])
+```
+
+```{r Outcome_IL6_fig_title}
+## Store R2, anova results and effect sizes in a title for plotting
+IL6_ann <-
+  "LMM: Conditional *R*^2^ = 0.791, Marginal *R*^2^ = 0.670<br>
+Timepoint: *F*<sub>(1, 57)</sub> = 263.015, *p* = < **0.001**, *η*^2^<sub>*p*</sub> = 0.82<br>
+Group: *F*<sub>(1, 58)</sub> = 0.791, *p* = 0.377, *η*^2^<sub>*p*</sub> = 0.01<br>
+Interaction: *F*<sub>(1, 57)</sub> = 3.583, *p* = 0.063, *η*^2^<sub>*p*</sub> = 0.06"
+```
+
+### Figure
+
+#### Log Transformed Data
+
+Plot with pairwise lines:
+
+``` {r Outcome_IL6_log_fig, fig.height = 5, fig.width = 7}
+## add interaction column to data frame
+IL6_long_log <- IL6_long_log %>%
+  dplyr::mutate(OutcomeTimepoint = factor(interaction(Outcome, Timepoint), 
+                                         levels = c("Tolerant.Pre",
+                                                    "Tolerant.Post",
+                                                    "Intolerant.Pre",
+                                                    "Intolerant.Post")))
+
+outcome_IL6_log_fig <- IL6_long_log %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = IL6,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome), 
+             alpha = 0.6, 
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IL6_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IL6_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  labs(y = IL6_axis_log) +
+  scale_y_continuous(breaks = seq(-3, 3, 1),
+                     limits = c(-3, 3.2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag()
+
+outcome_IL6_log_fig
+```
+
+#### Add emmeans
+
+``` {r Outcome_IL6_log_emm_fig, fig.height = 5, fig.width = 7}
+## emmeans data frame accessing info from saved "emmeans_se"
+emm_data <- data.frame(
+  Timepoint = c(emmeans_se$Timepoint[1], emmeans_se$Timepoint[2], emmeans_se$Timepoint[1], emmeans_se$Timepoint[2]),
+  Outcome = c(emmeans_se$Outcome[1], emmeans_se$Outcome[2], emmeans_se$Outcome[3], emmeans_se$Outcome[4]),
+  IL6 = c(emmeans_se$emmean[1], emmeans_se$emmean[2], emmeans_se$emmean[3], emmeans_se$emmean[4]),
+  SE = c(emmeans_se$SE[1], emmeans_se$SE[2], emmeans_se$SE[3], emmeans_se$SE[4])
+)
+
+## create OutcomeTimepoint interaction column
+emm_data$OutcomeTimepoint <- factor(interaction(emm_data$Outcome, emm_data$Timepoint),
+                                  levels = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"))
+
+## Now merge data
+IL6_long_log_merged <- merge(IL6_long_log, emm_data, by = c("OutcomeTimepoint", "Outcome", "Timepoint"))
+
+## Plot
+outcome_IL6_log_emm_fig <- IL6_long_log_merged %>%
+  ggplot(aes(x = OutcomeTimepoint, 
+             y = IL6.x,
+             group = OutcomeTimepoint)) +
+  geom_point(aes(group = UIN, colour = Outcome), 
+             alpha = 0.6,
+             size = 2) +
+  geom_line(aes(group = UIN, colour = "black"), 
+            linewidth = 0.3,
+            alpha = 0.6) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black", 
+               size = 3,
+               position = position_nudge(x = ifelse(IL6_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black", 
+               width = 0.15,
+               position = position_nudge(x = ifelse(IL6_long_log$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                    -0.20, 0.20), y = 0),
+               show.legend = FALSE) +
+  ## add estimated marginal means with shape aesthetic
+  geom_point(aes(y = IL6.y, shape = "emm ± SE"), 
+             color = "#5b5b5b", 
+             size = 3, 
+             position = position_nudge(x = ifelse(IL6_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                  -0.4, 0.4), y = 0)) +
+  ## add estimated marginal means standard error with shape aesthetic
+  geom_errorbar(aes(ymin = IL6.y - SE, 
+                    ymax = IL6.y + SE), 
+                position = position_nudge(x = ifelse(IL6_long_log_merged$OutcomeTimepoint %in% c("Tolerant.Pre", "Intolerant.Pre"), 
+                                                     -0.4, 0.4), y = 0),  
+                width = 0.15, 
+                color = "#5b5b5b") +
+  labs(y = IL6_axis_log) +
+  scale_y_continuous(breaks = seq(-3, 3, 1),
+                     limits = c(-3, 3.2),
+                     labels = scales::label_number(accuracy = 0.1)) +
+  scale_color_manual(values = group_cols) +
+  scale_shape_manual(name = "Estimates", values = c("emm ± SE" = 16)) +
+  scale_x_discrete("", 
+                   limits = c("Tolerant.Pre","Tolerant.Post","Intolerant.Pre","Intolerant.Post"),
+                   labels = c("Baseline", "Post-HTA", "Baseline", "Post-HTA")) +
+  theme_ag() +
+  guides(color = guide_legend(order = 1),  ## Set Outcome legend as 1st so it appears on top of estimates legend
+         shape = guide_legend(order = 2, override.aes = list(size = 3)))  ## Set estimates legend to 2nd
+
+outcome_IL6_log_emm_fig
+```
+
+#### Add LMM and ANOVA annotation
+
+``` {r Outcome_IL6_log_title_fig, fig.height = 6, fig.width = 7}
+## add IL6_ann title to the plot
+outcome_IL6_log_emm_title_fig <- outcome_IL6_log_emm_fig +
+  labs(title = IL6_ann) +
+  theme(plot.title = element_markdown(size = 14, lineheight = 1.2))
+
+outcome_IL6_log_emm_title_fig
+```
+
+## Baseline Markers Only
+
+### Zonulin
+
+#### Descriptives
+
+```{r Outcome_Zonulin_descriptives}
+jmv::descriptives(
+    formula = Zon_Pre ~ Outcome,
+    data = data,
+    iqr = TRUE,
+    skew = TRUE,
+    kurt = TRUE,
+    sw = TRUE)
+```
+
+#### Test of Difference
+
+non-parametric data:
+
+```{r Outcome_Zon_non-parametric}
+jmv::ttestIS(
+    formula = Zon_Pre ~ Outcome,
+    data = data,
+    vars = Zon_Pre,
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+### C-Reactive Protein
+
+#### Descriptives
+
+```{r Outcome_CRP_descriptives}
+jmv::descriptives(
+    formula = CRP_Pre ~ Outcome,
+    data = data,
+    iqr = TRUE,
+    skew = TRUE,
+    kurt = TRUE,
+    sw = TRUE)
+```
+
+#### Test of Difference
+
+non-parametric data:
+
+```{r Outcome_CRP_non-parametric}
+jmv::ttestIS(
+    formula = CRP_Pre ~ Outcome,
+    data = data,
+    vars = CRP_Pre,
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+# Figure Panels
+
+## Patients and Controls
+
+### Plot
+
+```{r Group_panel, fig.height = 15, fig.width = 14}
+row1 <- ggarrange(
+  group_IFABP_log_emm_title_fig,
+  group_CLDN3_emm_title_fig,
+  ncol = 2,
+  labels = c("A", "B"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row2 <- ggarrange(
+  group_LBP_log_emm_title_fig,
+  group_CD14_emm_title_fig,
+  ncol = 2,
+  labels = c("C", "D"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row3 <- ggarrange(
+  group_IL6_log_emm_title_fig,
+  ncol = 2,
+  labels = c("E"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+group_panel <- ggarrange(row1, 
+                         row2, 
+                         row3,
+                         nrow = 3)
+group_panel
+```
+
+### With Annotation
+
+```{r Group_panel_ann, fig.height = 15, fig.width = 14}
+row1ann <- annotate_figure(
+  row1,
+  left = text_grob(
+    "Enterocyte damage & \n tight junction integrity \n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row2ann <- annotate_figure(
+  row2,
+  left = text_grob(
+    "\n Microbial translocation \n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row3ann <- annotate_figure(row3,
+                           left = text_grob(
+                             "\n Inflammation \n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+group_panel_ann <- ggarrange(row1ann, 
+                             row2ann, 
+                             row3ann,
+                             nrow = 3)
+group_panel_ann
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/ggsave_HIC_patient_control_panel_annotated", ".png"),
+  plot = group_panel_ann,
+  height = 15,
+  width = 14,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/ggsave_HIC_patient_control_panel_annotated", ".jpeg"),
+  plot = group_panel_ann,
+  height = 15,
+  width = 14,
+  unit = "in",
+  dpi = 600
+)
+```
+
+## Heat Tolerance
+
+### Plot
+
+```{r Outcome_panel, fig.height = 15, fig.width = 14}
+row1 <- ggarrange(
+  outcome_IFABP_log_emm_title_fig,
+  outcome_CLDN3_emm_title_fig,
+  ncol = 2,
+  labels = c("A", "B"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row2 <- ggarrange(
+  outcome_LBP_log_emm_title_fig,
+  outcome_CD14_emm_title_fig,
+  ncol = 2,
+  labels = c("C", "D"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row3 <- ggarrange(
+  outcome_IL6_log_emm_title_fig,
+  ncol = 2,
+  labels = c("E"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+outcome_panel <- ggarrange(row1, 
+                           row2, 
+                           row3,
+                           nrow = 3)
+outcome_panel
+```
+
+### With Annotation
+
+```{r Outcome_panel_ann, fig.height = 15, fig.width = 14}
+row1ann <- annotate_figure(
+  row1,
+  left = text_grob(
+    "Enterocyte damage & \n tight junction integrity \n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row2ann <- annotate_figure(
+  row2,
+  left = text_grob(
+    "\n Microbial translocation \n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+row3ann <- annotate_figure(row3,
+                           left = text_grob(
+                             "\n Inflammation \n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+outcome_panel_ann <- ggarrange(row1ann, 
+                               row2ann, 
+                               row3ann,
+                               nrow = 3)
+outcome_panel_ann
+
+ggsave(
+  filename = paste0(
+    analysis_dir,
+    "figs/ggsave_HIC_heat_tolerance_panel_annotated",
+    ".png"
+  ),
+  plot = outcome_panel_ann,
+  height = 15,
+  width = 14,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(
+    analysis_dir,
+    "figs/ggsave_HIC_heat_tolerance_panel_annotated",
+    ".jpeg"
+  ),
+  plot = outcome_panel_ann,
+  height = 15,
+  width = 14,
+  unit = "in",
+  dpi = 600
+)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_biomarkers.Rout"))
+```
