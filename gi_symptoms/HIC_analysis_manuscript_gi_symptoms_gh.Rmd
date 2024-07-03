@@ -1,0 +1,159 @@
+---
+title: "HIC GI symptoms HTA Analysis (manuscript)"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+html_document:
+  toc: yes
+toc_float: yes
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      out.extra = "",
+                      message = FALSE, 
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc")) 
+```
+
+## Library
+
+```{r library}
+# Load the libraries
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(jmv)
+```
+
+## Parameters
+
+```{r parameters}
+data_dir = "..."
+analysis_dir = "..."
+pw_message   = "..."
+```
+
+## Load Data
+
+``` {r load_data}
+## load data here ...
+```
+
+# Gastroinestinal Symptoms
+
+## Patient and Controls
+
+### Descriptives
+
+```{r GI_descriptives_class}
+jmv::descriptives(
+    formula = Pre_Discomfort + Pre_Total_GI + Pre_Up_GI +	Pre_Low_GI ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r GI_descriptives_class2}
+jmv::descriptives(
+    formula = Pre_Nausea + Pre_Dizziness + Post_Discomfort + Post_Total_GI ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r GI_descriptives_class3}
+jmv::descriptives(
+    formula = Post_Up_GI + Post_Low_GI + Post_Nausea + Post_Dizziness ~ Class,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+```{r GI_non-parametric_class}
+jmv::ttestIS(
+    formula = Pre_Discomfort + Pre_Total_GI + Pre_Up_GI +	Pre_Low_GI +	
+      Pre_Nausea +	Pre_Dizziness +	Post_Discomfort + Post_Total_GI + 
+      Post_Up_GI +	Post_Low_GI	+ Post_Nausea +	Post_Dizziness ~ Class,
+    data = dat,
+    vars = vars(Pre_Discomfort, Pre_Total_GI, Pre_Up_GI, Pre_Low_GI, 
+                Pre_Nausea,	Pre_Dizziness, Post_Discomfort, Post_Total_GI, 
+                Post_Up_GI,	Post_Low_GI, Post_Nausea,	Post_Dizziness),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+## Heat Tolerant and Intolerant
+
+### Descriptives
+
+```{r GI_descriptives_outcome}
+jmv::descriptives(
+    formula = Pre_Discomfort + Pre_Total_GI + Pre_Up_GI +	Pre_Low_GI ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r GI_descriptives_outcome2}
+jmv::descriptives(
+    formula = Pre_Nausea + Pre_Dizziness + Post_Discomfort + Post_Total_GI ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+```{r GI_descriptives_outcome3}
+jmv::descriptives(
+    formula = Post_Up_GI + Post_Low_GI + Post_Nausea + Post_Dizziness ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+```{r GI_non-parametric_outcome}
+jmv::ttestIS(
+    formula = Pre_Discomfort + Pre_Total_GI + Pre_Up_GI +	Pre_Low_GI +	
+      Pre_Nausea +	Pre_Dizziness +	Post_Discomfort + Post_Total_GI + 
+      Post_Up_GI +	Post_Low_GI	+ Post_Nausea +	Post_Dizziness ~ Outcome,
+    data = dat,
+    vars = vars(Pre_Discomfort, Pre_Total_GI, Pre_Up_GI, Pre_Low_GI, 
+                Pre_Nausea,	Pre_Dizziness, Post_Discomfort, Post_Total_GI, 
+                Post_Up_GI,	Post_Low_GI, Post_Nausea,	Post_Dizziness),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_gi_symptoms.Rout"))
+```  
+
