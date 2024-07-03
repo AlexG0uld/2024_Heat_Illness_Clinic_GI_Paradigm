@@ -1,0 +1,170 @@
+---
+title: "HIC participant characteristics (manuscript)"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 3
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+html_document:
+  toc: yes
+toc_float: yes
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      out.extra = "",
+                      message = FALSE, 
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc")) 
+```
+
+## Library
+
+```{r library}
+## Load the libraries
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(jmv)
+```
+
+## Parameters
+
+```{r parameters}
+data_dir = "..."
+analysis_dir = "..."
+pw_message   = "..."
+```
+
+## Load Data
+Next we load in the data:
+
+```{r load_data}
+## load data here...
+```
+
+# Participant Characteristics
+
+## Patients and Controls
+
+### Descriptives
+
+```{r descriptives_Class}
+jmv::descriptives(
+    formula = Age + Height + Mass + BMI ~ Class,
+    data = dat,
+    missing = FALSE,
+    iqr = TRUE,
+    skew = FALSE,
+    kurt = FALSE,
+    sw = TRUE)
+```
+    
+```{r descriptives_Class2}
+jmv::descriptives(
+    formula = BodyFat + BSA + VO2max + post_EHI ~ Class,
+    data = dat,
+    missing = FALSE,
+    iqr = TRUE,
+    skew = FALSE,
+    kurt = FALSE,
+    sw = TRUE)
+```    
+                     
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Class}
+jmv::ttestIS(
+    formula = Height + Mass + BodyFat + BSA + VO2max ~ Class,
+    data = dat,
+    vars = vars(Height, Mass, BodyFat, BSA, VO2max),
+    norm = TRUE,
+    eqv = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Class}
+jmv::ttestIS(
+    formula = Age + BMI ~ Class,
+    data = dat,
+    vars = vars(Age, BMI),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE)
+```
+
+## Heat Tolerant and Intolerant
+
+### Descriptives
+
+```{r descriptives_Outcome}
+jmv::descriptives(
+    formula = Age + Height + Mass + BMI ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    skew = FALSE,
+    kurt = FALSE,
+    sw = TRUE)
+```
+
+```{r descriptives_Outcome2}
+jmv::descriptives(
+    formula = BodyFat + BSA + VO2max ~ Outcome,
+    data = dat,
+    iqr = TRUE,
+    skew = FALSE,
+    kurt = FALSE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r parametric_Outcome}
+jmv::ttestIS(
+    formula = Height + Mass + BMI + BodyFat + VO2max ~ Outcome,
+    data = dat,
+    vars = vars(Height, Mass, BMI, BodyFat, VO2max),
+    norm = TRUE,
+    eqv = TRUE)
+```
+
+non-parametric data:
+
+```{r non-parametric_Outcome}
+jmv::ttestIS(
+    formula = Age + BSA ~ Outcome,
+    data = dat,
+    vars = vars(Age, BSA),
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_charateristics.Rout"))
+```                   
+                     
