@@ -1,0 +1,2544 @@
+---
+title: "HIC Analysis ThermoPhys data (manuscript)"
+author: "Alex Gould"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: yes
+    toc_depth: 4
+    number_sections: yes
+    latex_engine: xelatex
+  rmarkdown::pdf_document:
+    extra_dependencies: float
+    toc: yes
+html_document:
+  toc: yes
+toc_float: yes
+---
+
+# Setup
+
+First let us set up the R environment:
+
+## Global options
+
+```{r global options, include = TRUE}
+knitr::opts_chunk$set(echo = TRUE, 
+                      warning = FALSE,
+                      error = FALSE,
+                      eval = TRUE,
+                      dev = c('pdf', 'png'),
+                      width = 60,
+                      fig.align = 'center', 
+                      fig.height = 10, 
+                      fig.width = 10, 
+                      fig.dpi = 300,
+                      fig.pos = "!H",
+                      dpi = 300,
+                      out.extra = "",
+                      message = FALSE, 
+                      cache = FALSE,
+                      pdf.options(encoding = "ISOLatin9.enc"),
+                      fig.path='figs/rmd/'
+                      ) 
+```
+
+## Library 
+
+```{r Library}
+library(xlsx)
+library(rstudioapi)
+library(tidyverse)
+library(jmv)
+library(ggtext)
+library(ggpubr)
+library(gridtext) 
+library(rstatix)
+library(scales)
+library(grid)
+```
+
+## Parameters
+
+``` {r Parameters}
+data_dir     = "..."
+analysis_dir = "..."
+pw_message   = "..."
+font         = element_text(family = "serif")
+group_cols   = c("Control" = "#0099CC", "Patient" = "#FF9900",
+                 "Tolerant" = "#005900", "Intolerant" = "#ff2c15")
+```
+
+### Figure parameters 
+
+First, create custom theme to use throughout:
+
+```{r figure_theme}
+## create custom theme
+theme_ag <- function(){
+
+  theme_classic() %+replace%
+    
+    theme(
+      text = font,
+      axis.text.y  = element_text(size = 12, margin = margin(r = 3)),
+      axis.title.y = element_text(size = 16, angle = 90, vjust = 2),
+      axis.text.x  = element_text(size = 16, margin = margin(r = 3)),
+      axis.title.x = element_blank(),
+      legend.position = "none"
+      )
+}
+```
+
+Now, make custom axis titles to use throughout:
+
+```{r figure_custom_y_axis}
+## Rectal Temperature
+Trec_rest_yaxis   = expression(italic("T")*""[rec] ~ "(\u00b0C)")
+Trec_term_yaxis   = expression(italic("T")*""[rec] ~ "(\u00b0C)")
+Trec_phase1_yaxis = expression(italic("T")*""[rec] ~ "(\u00b0C·" * h^-1*")")
+Trec_phase2_yaxis = expression(italic("T")*""[rec] ~ "(\u00b0C·" * h^-1*")")
+
+## Skin Temperature
+Tsk_rest_yaxis    = expression(italic("T")*""[sk] ~ "(\u00b0C)")
+Tsk_term_yaxis    = expression(italic("T")*""[sk] ~ "(\u00b0C)")
+Tsk_phase1_yaxis  = expression(italic("T")*""[sk] ~ "(\u00b0C·" * h^-1*")")
+Tsk_phase2_yaxis  = expression(italic("T")*""[sk] ~ "(\u00b0C·" * h^-1*")")
+
+## Body Temperature
+Tb_rest_yaxis     = expression(italic("T")*""[b] ~ "(\u00b0C)")
+Tb_term_yaxis     = expression(italic("T")*""[b] ~ "(\u00b0C)")
+Tb_phase1_yaxis   = expression(italic("T")*""[b] ~ "(\u00b0C·" * h^-1*")")
+Tb_phase2_yaxis   = expression(italic("T")*""[b] ~ "(\u00b0C·" * h^-1*")")
+
+## Heart Rate
+HR_rest_yaxis     = expression(paste("HR" ~ "(beats·"* min^-1 * ")"))
+HR_yaxis          = expression(paste("Heart Rate" ~ "(beats·"* min^-1 * ")"))
+HR_term_yaxis     = expression(paste("HR" ~ "(beats·"* min^-1 * ")"))
+HR_phase1_yaxis   = expression(paste("HR" ~ "(beats·" * min^-1 * "·" * h^-1 * ")"))
+HR_phase2_yaxis   = expression(paste("HR" ~ "(beats·" * min^-1 * "·" * h^-1 * ")"))
+
+## Sweat Rate
+Sweat_yaxis       = expression(paste("WBSR (L·" * h^-1 * "·" * m^-2 * ")"))
+```
+
+Fix for `stat_compare_means()` function to allow Times New Roman font. Thank you: https://stackoverflow.com/questions/77346644/stat-compare-means-unable-to-change-font-family-when-using-comparisons-argu 
+
+```{r stat_compare_means_fix}
+fixed_call <- quote(ggsignif::geom_signif(comparisons = comparisons, 
+                                          y_position = label.y, 
+                                          test = method, test.args = method.args, 
+                                          step_increase = step.increase, 
+                                          size = bracket.size, textsize = 6, color = color, 
+                                          map_signif_level = map_signif_level, 
+                                          tip_length = tip.length, data = data,
+                                          vjust = vjust, ...))
+
+scm <- as.list(ggpubr::stat_compare_means)
+scm[[26]][[2]][[3]][[13]] <- fixed_call
+stat_compare_means <- function(...) {
+  ggp <- getNamespace('ggpubr')
+  .method_info <- ggp$.method_info
+  .add_item <- ggp$.add_item
+  .is_p.signif_in_mapping <- ggp$.is_p.signif_in_mapping
+  .is_empty <- ggp$.is_empty
+  do.call(as.function(scm), list(...), quote = FALSE)
+}
+```
+
+## Load Data
+Next we load in the data. 
+
+```{r load_data}
+## data loaded here... 
+```
+
+# Patients and Controls
+
+## Rectal Temperature
+
+### Descriptives
+
+```{r Trec_descriptives_class}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Class,
+    data = dat_Trec,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+non-parametric data:
+
+```{r Trec_non-parametric_class}
+jmv::ttestIS(
+    formula = rest + term + phase1 + phase2 ~ Class,
+    data = dat_Trec,
+    vars = vars(rest, term, phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+how many individuals had a termination value greater than 39.0:
+```{r Trec_term_39}
+dat_Trec %>%
+  dplyr::filter(term >= 39.0) %>%
+  dplyr::summarize(count = n())
+```
+
+what was the average cohort Trec termination value:
+```{r Trec_term_cohort}
+## Perform the Shapiro-Wilk test and summarise Trec termination for cohort. 
+jmv::descriptives(
+    vars = "term",
+    data = dat_Trec,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+non-parametric
+
+``` {r Trec_rest_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_rest_class_p <- ggplot(dat_Trec, aes(x = Class, y = rest)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_rest_yaxis) +
+  scale_y_continuous(breaks = seq(36.5, 40, .5),
+                     limits = c(36.5, 40),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 38.5) +
+  theme_ag() 
+
+## view figure
+Trec_rest_class_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r Trec_phase1_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_phase1_class_p <- ggplot(dat_Trec, aes(x = Class, y = phase1)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3, .5), 
+                     limits = c(-0.5, 3),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+## view figure
+Trec_phase1_class_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+non-parametric
+
+``` {r Trec_phase2_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_phase2_class_p <- ggplot(dat_Trec, aes(x = Class, y = phase2)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3, .50), 
+                     limits = c(-0.5, 3),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+## view figure
+Trec_phase2_class_p
+```
+
+#### Termination
+
+plot termination figure:  
+non-parametric
+
+``` {r Trec_termination_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_term_class_p <- ggplot(dat_Trec, aes(x = Class, y = term)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_term_yaxis) +
+  scale_y_continuous(breaks = seq(36.5, 40, .5),
+                     limits = c(36.5, 40),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 39.75) +
+  theme_ag() 
+
+## view figure
+Trec_term_class_p
+```
+
+## Skin Temperature
+
+### Descriptives
+
+```{r Tskin_descriptives_class}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Class,
+    data = dat_Tskin,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r Tskin_parametric_class}
+jmv::ttestIS(
+    formula = rest ~ Class,
+    data = dat_Tskin,
+    vars = vars(rest),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r Tskin_non-parametric_class}
+jmv::ttestIS(
+    formula = term + phase1 + phase2 ~ Class,
+    data = dat_Tskin,
+    vars = vars(term, phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+parametric
+
+``` {r Tskin_rest_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_rest_class_p <- ggplot(dat_Tskin, aes(x = Class, y = rest)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_rest_yaxis) +
+  scale_y_continuous(breaks = seq(30, 37, 1), 
+                     limits = c(30, 37),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Tskin_rest_class_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r Tskin_phase1_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_phase1_class_p <- ggplot(dat_Tskin, aes(x = Class, y = phase1)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+    labs(x = "Group",
+         y = Tsk_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-16, 10, 2), 
+                     limits = c(-16, 10),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Tskin_phase1_class_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+non-parametric
+
+``` {r Tskin_phase2_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_phase2_class_p <- ggplot(dat_Tskin, aes(x = Class, y = phase2)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+    labs(x = "Group",
+         y = Tsk_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-16, 10, 2),
+                     limits = c(-16, 10),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 4) + 
+  theme_ag()
+
+## view figure
+Tskin_phase2_class_p
+```
+
+#### Termination
+
+plot termination figure:  
+non-parametric
+
+``` {r Tskin_termination_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_term_class_p <- ggplot(dat_Tskin, aes(x = Class, y = term)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_term_yaxis) +
+  scale_y_continuous(breaks = seq(30, 37, 1), 
+                     limits = c(30, 37),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Tskin_term_class_p
+```
+
+## Body Temperature
+
+### Descriptives
+
+```{r Tbody_descriptives_class}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Class,
+    data = dat_Tbody,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r Tbody_parametric_class}
+jmv::ttestIS(
+    formula = term + phase1 + phase2 ~ Class,
+    data = dat_Tbody,
+    vars = vars(term, phase1, phase2),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r Tbody_non-parametric_class}
+jmv::ttestIS(
+    formula = rest ~ Class,
+    data = dat_Tbody,
+    vars = vars(rest),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+non-parametric
+
+``` {r Tbody_rest_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_rest_class_p <- ggplot(dat_Tbody, aes(x = Class, y = rest)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_rest_yaxis) +
+  scale_y_continuous(breaks = seq(36, 39.5, .5),
+                     limits = c(36, 39.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 38) +
+  theme_ag()
+
+## view figure
+Tbody_rest_class_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+parametric
+
+``` {r Tbody_phase1_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_phase1_class_p <- ggplot(dat_Tbody, aes(x = Class, y = phase1)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3.5, .5), 
+                     limits = c(-0.5, 3.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+## view figure
+Tbody_phase1_class_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+parametric
+
+``` {r Tbody_phase2_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_phase2_class_p <- ggplot(dat_Tbody, aes(x = Class, y = phase2)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3.5, .5), 
+                     limits = c(-0.5, 3.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 1.75) +  
+  theme_ag()
+
+## view figure
+Tbody_phase2_class_p
+```
+
+#### Termination
+
+plot termination figure:  
+parametric
+
+``` {r Tbody_termination_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_term_class_p <- ggplot(dat_Tbody, aes(x = Class, y = term)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_term_yaxis) +
+  scale_y_continuous(breaks = seq(36, 39.5, .5),
+                     limits = c(36, 39.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 39.25) +
+  theme_ag()
+
+## view figure
+Tbody_term_class_p
+```
+
+## Heart Rate
+
+### Descriptives
+
+```{r HR_descriptives_class}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Class,
+    data = dat_HR,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r HR_parametric_class}
+jmv::ttestIS(
+    formula = rest ~ Class,
+    data = dat_HR,
+    vars = vars(rest),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r HR_non-parametric_class}
+jmv::ttestIS(
+    formula = term + phase1 + phase2 ~ Class,
+    data = dat_HR,
+    vars = vars(term, phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+parametric
+
+``` {r HR_rest_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_rest_class_p <- ggplot(dat_HR, aes(x = Class, y = rest)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_rest_yaxis) +
+  scale_y_continuous(breaks = seq(60, 220, 20),
+                     limits = c(60, 220)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 150) +
+  theme_ag()
+
+#view figure
+HR_rest_class_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r HR_phase1_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_phase1_class_p <- ggplot(dat_HR, aes(x = Class, y = phase1)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-160, 240, 40),
+                     limits = c(-160, 240)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+#view figure
+HR_phase1_class_p
+```
+
+#### Phase 2
+
+plot Phase 2 - termination rate of rise figure:  
+non-parametric
+
+``` {r HR_phase2_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_phase2_class_p <- ggplot(dat_HR, aes(x = Class, y = phase2)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+    labs(x = "Group",
+       y = HR_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-160, 240, 40),
+                     limits = c(-160, 240)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 40) + 
+  theme_ag()
+
+#view figure
+HR_phase2_class_p
+```
+
+#### Termination 
+
+plot termination figure:  
+non-parametric
+
+``` {r HR_termination_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_term_class_p <- ggplot(dat_HR, aes(x = Class, y = term)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_term_yaxis) +
+  scale_y_continuous(breaks = seq(60, 220, 20),
+                     limits = c(60, 220)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 210) +
+  theme_ag()
+
+#view figure
+HR_term_class_p
+```
+
+## Sweat
+
+### Descriptives
+
+```{r sweat_descriptives_class}
+jmv::descriptives(
+    formula = wbsr ~ Class,
+    data = dat_sweat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r sweat_parametric_class}
+jmv::ttestIS(
+    formula = wbsr ~ Class,
+    data = dat_sweat,
+    vars = vars(wbsr),
+    norm = TRUE,
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+plot sweat rate relative to body surface area:  
+parametric
+
+``` {r sweat_class_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+sweat_class_p <- ggplot(dat_sweat, aes(x = Class, y = wbsr)) +
+  geom_jitter(aes(color = Class), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Sweat_yaxis) +
+  scale_y_continuous(breaks = seq(0, 1.2, .1), 
+                     limits = c(0, 1.2)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Control", "Patient")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+sweat_class_p
+```
+
+# Heat Tolerant and Intolerant
+
+## Rectal Temperature
+
+### Descriptives
+
+```{r Trec_descriptives_Outcome}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Outcome,
+    data = dat_Trec,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r Trec_parametric_Outcome}
+jmv::ttestIS(
+    formula = rest + term ~ Outcome,
+    data = dat_Trec,
+    vars = vars(rest, term),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r Trec_non-parametric_Outcome}
+jmv::ttestIS(
+    formula = phase1 + phase2 ~ Outcome,
+    data = dat_Trec,
+    vars = vars(phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+parametric
+
+``` {r Trec_rest_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_rest_Outcome_p <- ggplot(dat_Trec, aes(x = Outcome, y = rest)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_rest_yaxis) +
+  scale_y_continuous(breaks = seq(36.5, 40, .5),
+                     limits = c(36.5, 40),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 38.5) +
+  theme_ag() 
+
+## view figure
+Trec_rest_Outcome_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r Trec_phase1_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_phase1_Outcome_p <- ggplot(dat_Trec, aes(x = Outcome, y = phase1)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3, .5), 
+                     limits = c(-0.5, 3),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Trec_phase1_Outcome_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+non-parametric
+
+``` {r Trec_phase2_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_phase2_Outcome_p <- ggplot(dat_Trec, aes(x = Outcome, y = phase2)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3, .5), 
+                     limits = c(-0.5, 3),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+## view figure
+Trec_phase2_Outcome_p
+```
+
+#### Termination
+
+plot termination figure:  
+parametric
+
+``` {r Trec_termination_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Trec_term_Outcome_p <- ggplot(dat_Trec, aes(x = Outcome, y = term)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Trec_term_yaxis) +
+  scale_y_continuous(breaks = seq(36.5, 40, .5),
+                     limits = c(36.5, 40),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     label.y = 39.7,
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Trec_term_Outcome_p
+```
+
+## Skin Temperature
+
+### Descriptives
+
+```{r Tskin_descriptives_Outcome}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Outcome,
+    data = dat_Tskin,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r Tskin_parametric_Outcome}
+jmv::ttestIS(
+    formula = rest + term ~ Outcome,
+    data = dat_Tskin,
+    vars = vars(rest, term),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r Tskin_non-parametric_Outcome}
+jmv::ttestIS(
+    formula = phase1 + phase2 ~ Outcome,
+    data = dat_Tskin,
+    vars = vars(phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest 
+
+plot rest figure:  
+parametric
+
+``` {r Tskin_rest_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_rest_Outcome_p <- ggplot(dat_Tskin, aes(x = Outcome, y = rest)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_rest_yaxis) +
+  scale_y_continuous(breaks = seq(30, 37, 1), 
+                     limits = c(30, 37),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 36) +
+  theme_ag()
+
+## view figure
+Tskin_rest_Outcome_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r Tskin_phase1_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_phase1_Outcome_p <- ggplot(dat_Tskin, aes(x = Outcome, y = phase1)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-16, 10, 2), 
+                     limits = c(-16, 10.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     label.y = 9.5,
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+Tskin_phase1_Outcome_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+non-parametric
+
+``` {r Tskin_phase2_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_phase2_Outcome_p <- ggplot(dat_Tskin, aes(x = Outcome, y = phase2)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-16, 10, 2), 
+                     limits = c(-16, 10.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 4) +
+  theme_ag()
+
+## view figure
+Tskin_phase2_Outcome_p
+```
+
+#### Termination
+
+plot termination figure:  
+parametric
+
+``` {r Tskin_termination_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tskin_term_Outcome_p <- ggplot(dat_Tskin, aes(x = Outcome, y = term)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tsk_term_yaxis) +
+  scale_y_continuous(breaks = seq(30, 37, 1), 
+                     limits = c(30, 37),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 36.5) +
+  theme_ag()
+
+## view figure
+Tskin_term_Outcome_p
+```
+
+## Body Temperature
+
+### Descriptives
+
+```{r Tbody_descriptives_Outcome}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Outcome,
+    data = dat_Tbody,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r Tbody_parametric_Outcome}
+jmv::ttestIS(
+    formula = rest + term + phase2 ~ Outcome,
+    data = dat_Tbody,
+    vars = vars(rest, term, phase2),
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r Tbody_non-parametric_Outcome}
+jmv::ttestIS(
+    formula = phase1 ~ Outcome,
+    data = dat_Tbody,
+    vars = vars(phase1),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+parametric
+
+``` {r Tbody_rest_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_rest_Outcome_p <- ggplot(dat_Tbody, aes(x = Outcome, y = rest)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_rest_yaxis) +
+  scale_y_continuous(breaks = seq(36, 39.5, .5),
+                     limits = c(36, 39.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 38) +
+  theme_ag()
+
+## view figure
+Tbody_rest_Outcome_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r Tbody_phase1_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_phase1_Outcome_p <- ggplot(dat_Tbody, aes(x = Outcome, y = phase1)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3.5, .5), 
+                     limits = c(-0.5, 3.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) + 
+  theme_ag()
+
+## view figure
+Tbody_phase1_Outcome_p
+```
+
+#### Phase 2
+
+plot Phase 2 rate of rise figure:  
+parametric
+
+``` {r Tbody_phase2_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(1234)
+Tbody_phase2_Outcome_p <- ggplot(dat_Tbody, aes(x = Outcome, y = phase2)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-0.5, 3.5, .5), 
+                     limits = c(-0.5, 3.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 1.75) +
+  theme_ag()
+
+## view figure
+Tbody_phase2_Outcome_p
+```
+
+#### Termination
+
+plot termination figure:  
+parametric
+
+``` {r Tbody_termination_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+Tbody_term_Outcome_p <- ggplot(dat_Tbody, aes(x = Outcome, y = term)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Tb_term_yaxis) +
+  scale_y_continuous(breaks = seq(36, 39.5, .5),
+                     limits = c(36, 39.5),
+                     labels = scales::label_number(accuracy = 0.01)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 39.25) +
+  theme_ag()
+
+## view figure
+Tbody_term_Outcome_p
+```
+
+## Heart Rate
+
+### Descriptives
+
+```{r HR_descriptives_Outcome}
+jmv::descriptives(
+    formula = rest + term + phase1 + phase2 ~ Outcome,
+    data = dat_HR,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+parametric data:
+
+```{r HR_parametric_Outcome}
+jmv::ttestIS(
+    formula = rest ~ Outcome,
+    data = dat_HR,
+    vars = vars(rest),
+    norm = TRUE,
+    eqv = TRUE,
+    effectSize = TRUE)
+```
+
+non-parametric data:
+
+```{r HR_non-parametric_Outcome}
+jmv::ttestIS(
+    formula = term + phase1 + phase2 ~ Outcome,
+    data = dat_HR,
+    vars = vars(term, phase1, phase2),
+    students = FALSE,
+    mann = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+#### Rest
+
+plot rest figure:  
+parametric
+
+``` {r HR_rest_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_rest_Outcome_p <- ggplot(dat_HR, aes(x = Outcome, y = rest)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = mean, 
+               geom = "point", 
+               color = "black",
+               size = 5,
+               show.legend = FALSE) +
+  stat_summary(fun.data = mean_sd, 
+               geom = "errorbar", 
+               color = "black",
+               width = 0.3,
+               size = 1.0,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_rest_yaxis) +
+  scale_y_continuous(breaks = seq(60, 220, 20),
+                     limits = c(60, 220)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "t.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 150) +
+  theme_ag()
+
+#view figure
+HR_rest_Outcome_p
+```
+
+#### Phase 1
+
+plot Phase 1 rate of rise figure:  
+non-parametric
+
+``` {r HR_phase1_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_phase1_Outcome_p <- ggplot(dat_HR, aes(x = Outcome, y = phase1)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_phase1_yaxis) +
+  scale_y_continuous(breaks = seq(-160, 240, 40),
+                     limits = c(-160, 240)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+HR_phase1_Outcome_p
+```
+
+#### Phase 2
+
+plot Phase 2 - termination rate of rise figure:  
+non-parametric
+
+``` {r HR_stage2_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_phase2_Outcome_p <- ggplot(dat_HR, aes(x = Outcome, y = phase2)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  geom_hline(yintercept = 0, linetype = "dashed", color = "black") +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_phase2_yaxis) +
+  scale_y_continuous(breaks = seq(-160, 240, 40),
+                     limits = c(-160, 240)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 40) +
+  theme_ag()
+
+## view figure
+HR_phase2_Outcome_p
+```
+
+#### Termination
+
+plot termination figure:  
+non-parametric
+
+``` {r HR_termination_Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+HR_term_Outcome_p <- ggplot(dat_HR, aes(x = Outcome, y = term)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = HR_term_yaxis) +
+  scale_y_continuous(breaks = seq(60, 220, 20),
+                     limits = c(60, 220)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2,
+                     label.y = 210) +
+  theme_ag()
+
+## view figure
+HR_term_Outcome_p
+```
+
+## Sweat
+
+### Descriptives
+
+```{r sweat_descriptives_Outcome}
+jmv::descriptives(
+    formula = wbsr ~ Outcome,
+    data = dat_sweat,
+    iqr = TRUE,
+    sw = TRUE)
+```
+
+### Test of Difference
+
+non-parametric data:
+
+```{r sweat_non-parametric_Outcome}
+jmv::ttestIS(
+    formula = wbsr ~ Outcome,
+    data = dat_sweat,
+    vars = wbsr,
+    students = FALSE,
+    mann = TRUE,
+    norm = TRUE,
+    effectSize = TRUE)
+```
+
+### Figure
+
+plot sweat rate relative to body surface area:    
+non-parametric
+
+``` {r sweat__Outcome_fig, fig.height = 5, fig.width = 6}
+set.seed(123)
+sweat_Outcome_p <- ggplot(dat_sweat, aes(x = Outcome, y = wbsr)) +
+  geom_jitter(aes(color = Outcome), 
+              width = 0.3,
+              height = 0,
+              alpha = 0.8,
+              size = 3,
+              shape = 16) +
+  stat_summary(fun = median,
+               geom="crossbar",
+               color="black",
+               width = 0.6,
+               linewidth = 0.6,
+               show.legend = FALSE) +
+  stat_summary(fun.data = median_iqr,
+               geom="errorbar",
+               color="black",
+               width = 0.3,
+               linewidth = 0.8,
+               show.legend = FALSE) +
+  labs(x = "Group",
+       y = Sweat_yaxis) +
+  scale_y_continuous(breaks = seq(0, 1.2, .1), 
+                     limits = c(0, 1.2)) +
+  scale_color_manual(values = group_cols) +
+  stat_compare_means(comparisons = list(c("Tolerant", "Intolerant")),
+                     method = "wilcox.test",
+                     label = "p.signif",
+                     family = "serif",
+                     paired = FALSE,
+                     bracket.size = 0.6,
+                     vjust = -0.2) +
+  theme_ag()
+
+## view figure
+sweat_Outcome_p
+```
+
+# Figure Panels
+
+## Patient and Control
+
+### All Thermo Indices
+
+Patient and control thermophys panel:
+```{r thermophys_panel_class, warning = FALSE, fig.height = 20, fig.width = 15}
+row1 <-
+  ggarrange(
+    Trec_rest_class_p,
+    Trec_phase1_class_p,
+    Trec_phase2_class_p,
+    Trec_term_class_p,
+    labels = LETTERS[1:4],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row2 <-
+  ggarrange(
+    Tskin_rest_class_p,
+    Tskin_phase1_class_p,
+    Tskin_phase2_class_p,
+    Tskin_term_class_p,
+    labels = LETTERS[5:8],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row3 <-
+  ggarrange(
+    Tbody_rest_class_p,
+    Tbody_phase1_class_p,
+    Tbody_phase2_class_p,
+    Tbody_term_class_p,
+    labels = LETTERS[9:12],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row4 <-
+  ggarrange(
+    HR_rest_class_p,
+    HR_phase1_class_p,
+    HR_phase2_class_p,
+    HR_term_class_p,
+    labels = LETTERS[13:16],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row5 <- ggarrange(
+  "",
+  "",
+  "",
+  sweat_class_p,
+  labels = c("", "", "", "Q"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  ),
+  vjust = 1.0,
+  ncol = 4
+)
+
+Thermophys_class_panel <- ggarrange(row1,
+                                    row2, 
+                                    row3, 
+                                    row4, 
+                                    row5,
+                                    nrow = 5)
+
+## view
+Thermophys_class_panel
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".png"),
+  plot = Thermophys_class_panel,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".jpeg"),
+  plot = Thermophys_class_panel,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+```
+
+#### Annotate 
+
+```{r thermophys_panel_class_annotate, warning = FALSE, fig.height = 20, fig.width = 15}
+## Create combined top annotation using grobTree
+top_annotation <- grobTree(
+  text_grob(
+    "0 minute\n",
+    size = 16,
+    x = 0.15,
+    y = 0,
+    hjust = 0.5,
+    face = "bold",
+    family = "serif"
+  ),
+  text_grob(
+    "Phase 1\n",
+    size = 16,
+    x = 0.4,
+    y = 0,
+    hjust = 0.5,
+    face = "bold",
+    family = "serif"
+  ),
+  text_grob(
+    "Phase 2\n",
+    size = 16,
+    x = 0.65,
+    y = 0,
+    hjust = 0.5,
+    face = "bold",
+    family = "serif"
+  ),
+  text_grob(
+    "Termination\n",
+    size = 16,
+    x = 0.9,
+    y = 0,
+    hjust = 0.5,
+    face = "bold",
+    family = "serif"
+  )
+)
+
+## Annotate row1
+row1ann <- annotate_figure(
+  row1,
+  left = text_grob(
+    "Rectal Temperature\n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  ),
+  top = top_annotation
+)
+
+
+## Annotate row2
+row2ann <- annotate_figure(row2,
+                           left = text_grob(
+                             "Mean Skin Temperature\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row3
+row3ann <- annotate_figure(row3,
+                           left = text_grob(
+                             "Mean Body Temperature\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row4
+row4ann <- annotate_figure(row4,
+                           left = text_grob(
+                             "Heart Rate\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row5
+row5ann <- annotate_figure(row5,
+                           left = text_grob(
+                             "Sweat Rate\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Combine rows
+Thermophys_class_panel_ann <- ggarrange(row1ann, 
+                                        row2ann, 
+                                        row3ann, 
+                                        row4ann, 
+                                        row5ann, 
+                                        nrow=5)
+
+## edit top margin to allow more space top annotations
+Thermophys_class_panel_ann <- Thermophys_class_panel_ann +
+  theme(plot.margin = margin(
+    t = 0.4,
+    r = 0.2,
+    b = 0.2,
+    l = 0.2,
+    unit = "inches"
+  ))
+## show panel
+Thermophys_class_panel_ann
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel_annotated", ".png"),
+  plot = Thermophys_class_panel_ann,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel_annotated", ".jpeg"),
+  plot = Thermophys_class_panel_ann,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+```
+
+## Heat Tolerant and Intolerant
+
+### All Thermo Indices
+
+Tolerant and Intolerant thermophys panel:
+```{r thermophys_panel_outcome, warning = FALSE, fig.height = 20, fig.width = 15}
+row1 <-
+  ggarrange(
+    Trec_rest_Outcome_p,
+    Trec_phase1_Outcome_p,
+    Trec_phase2_Outcome_p,
+    Trec_term_Outcome_p,
+    labels = LETTERS[1:4],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row2 <-
+  ggarrange(
+    Tskin_rest_Outcome_p,
+    Tskin_phase1_Outcome_p,
+    Tskin_phase2_Outcome_p,
+    Tskin_term_Outcome_p,
+    labels = LETTERS[5:8],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row3 <-
+  ggarrange(
+    Tbody_rest_Outcome_p,
+    Tbody_phase1_Outcome_p,
+    Tbody_phase2_Outcome_p,
+    Tbody_term_Outcome_p,
+    labels = LETTERS[9:12],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row4 <-
+  ggarrange(
+    HR_rest_Outcome_p,
+    HR_phase1_Outcome_p,
+    HR_phase2_Outcome_p,
+    HR_term_Outcome_p,
+    labels = LETTERS[13:16],
+    font.label = list(
+      size = 18,
+      face = "bold",
+      family = "serif"
+    ),
+    vjust = 1.0,
+    ncol = 4
+  )
+
+row5 <- ggarrange(
+  "",
+  "",
+  "",
+  sweat_Outcome_p,
+  labels = c("", "", "", "Q"),
+  font.label = list(
+    size = 18,
+    face = "bold",
+    family = "serif"
+  ),
+  vjust = 1.0,
+  ncol = 4
+)
+
+Thermophys_outcome_panel <- ggarrange(row1,
+                                      row2,
+                                      row3,
+                                      row4,
+                                      row5,
+                                      nrow = 5)
+
+## view
+Thermophys_outcome_panel
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".png"),
+  plot = Thermophys_outcome_panel,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".jpeg"),
+  plot = Thermophys_outcome_panel,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+```
+
+#### Annotate 
+
+```{r thermophys_panel_outcome_annotate, warning = FALSE, fig.height = 20, fig.width = 15}
+## Annotate row1
+row1ann <- annotate_figure(
+  row1,
+  left = text_grob(
+    "Rectal Temperature\n",
+    rot = 90,
+    size = 16,
+    face = "bold",
+    family = "serif"
+  ),
+  top = top_annotation
+)
+
+
+## Annotate row2
+row2ann <- annotate_figure(row2,
+                           left = text_grob(
+                             "Mean Skin Temperature\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row3
+row3ann <- annotate_figure(row3,
+                           left = text_grob(
+                             "Mean Body Temperature\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row4
+row4ann <- annotate_figure(row4,
+                           left = text_grob(
+                             "Heart Rate\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Annotate row5
+row5ann <- annotate_figure(row5,
+                           left = text_grob(
+                             "Sweat Rate\n",
+                             rot = 90,
+                             size = 16,
+                             face = "bold",
+                             family = "serif"
+                           ))
+
+## Combine rows
+Thermophys_outcome_panel_ann <-
+  ggarrange(row1ann, 
+            row2ann, 
+            row3ann, 
+            row4ann, 
+            row5ann, 
+            nrow = 5)
+## edit top margin to allow more space top annotations
+Thermophys_outcome_panel_ann <- Thermophys_outcome_panel_ann +
+  theme(plot.margin = margin(
+    t = 0.4,
+    r = 0.2,
+    b = 0.2,
+    l = 0.2,
+    unit = "inches"
+  ))
+## show panel
+Thermophys_outcome_panel_ann
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel_annotated", ".png"),
+  plot = Thermophys_outcome_panel_ann,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+
+ggsave(
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel_annotated", ".jpeg"),
+  plot = Thermophys_outcome_panel_ann,
+  height = 23,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+```
+
+# Session info
+
+``` {r sessionInfo}
+sinfo <- sessionInfo()
+sinfo
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_thermophys.Rout"))
+```
+
