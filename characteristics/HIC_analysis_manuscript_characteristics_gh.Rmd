@@ -165,6 +165,6 @@ jmv::ttestIS(
 ``` {r sessionInfo}
 sinfo <- sessionInfo()
 sinfo
-save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_charateristics.Rout"))
+save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_characteristics.Rout"))
 ```                   
                      
