@@ -1,5 +1,5 @@
 # 2024_Heat_Illness_Clinic_GI_Paradigm
-This repository contains data analysis scripts for publication '...'  
+This repository contains data analysis scripts for the publication 'Gastrointestinal microbiome and integrity, inflammation and thermoregulation in recent exertional heat illness patients and controls: a cross-sectional comparison' by Gould et al. (date). DOI: 
 
 Folder/file description:  
 
