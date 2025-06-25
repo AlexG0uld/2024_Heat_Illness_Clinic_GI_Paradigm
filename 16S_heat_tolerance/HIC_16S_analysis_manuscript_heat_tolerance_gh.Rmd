@@ -2840,7 +2840,21 @@ ggsave(
   filename = paste0(
     analysis_dir,
     "figs/HIC_microbiome_heat_tolerance_panel",
-    ".jpeg"
+    ".tiff"
+  ),
+  plot = microbiome_panel,
+  height = 22,
+  width = 17,
+  unit = "in",
+  dpi = 600
+)
+
+## Save
+ggsave(
+  filename = paste0(
+    analysis_dir,
+    "figs/HIC_microbiome_heat_tolerance_panel",
+    ".pdf"
   ),
   plot = microbiome_panel,
   height = 22,
