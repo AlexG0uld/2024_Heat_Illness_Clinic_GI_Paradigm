@@ -2071,100 +2071,46 @@ sweat_Outcome_p <- ggplot(dat_sweat, aes(x = Outcome, y = wbsr)) +
 ## view figure
 sweat_Outcome_p
 ```
-
 # Figure Panels
 
 ## Patient and Control
 
-### All Thermo Indices
+### Terminal Values
 
-Patient and control thermophys panel:
-```{r thermophys_panel_class, warning = FALSE, fig.height = 20, fig.width = 15}
+```{r thermophys_panel_class, fig.height = 8, fig.width = 10}
 row1 <-
   ggarrange(
-    Trec_rest_class_p,
-    Trec_phase1_class_p,
-    Trec_phase2_class_p,
     Trec_term_class_p,
-    labels = LETTERS[1:4],
+    Tskin_term_class_p,
+    Tbody_term_class_p,
+    labels = paste0("(", letters[1:3], ")"),
     font.label = list(
-      size = 18,
+      size = 14, 
       face = "bold",
       family = "serif"
     ),
     vjust = 1.0,
-    ncol = 4
+    ncol = 3
   )
 
 row2 <-
   ggarrange(
-    Tskin_rest_class_p,
-    Tskin_phase1_class_p,
-    Tskin_phase2_class_p,
-    Tskin_term_class_p,
-    labels = LETTERS[5:8],
-    font.label = list(
-      size = 18,
-      face = "bold",
-      family = "serif"
-    ),
-    vjust = 1.0,
-    ncol = 4
-  )
-
-row3 <-
-  ggarrange(
-    Tbody_rest_class_p,
-    Tbody_phase1_class_p,
-    Tbody_phase2_class_p,
-    Tbody_term_class_p,
-    labels = LETTERS[9:12],
-    font.label = list(
-      size = 18,
-      face = "bold",
-      family = "serif"
-    ),
-    vjust = 1.0,
-    ncol = 4
-  )
-
-row4 <-
-  ggarrange(
-    HR_rest_class_p,
-    HR_phase1_class_p,
-    HR_phase2_class_p,
     HR_term_class_p,
-    labels = LETTERS[13:16],
+    sweat_class_p,
+    "",
+    labels = paste0("(", letters[4:5], ")"),
     font.label = list(
-      size = 18,
+      size = 14, 
       face = "bold",
       family = "serif"
     ),
     vjust = 1.0,
-    ncol = 4
+    ncol = 3
   )
-
-row5 <- ggarrange(
-  "",
-  "",
-  "",
-  sweat_class_p,
-  labels = c("", "", "", "Q"),
-  font.label = list(
-    size = 18,
-    face = "bold",
-    family = "serif"
-  ),
-  vjust = 1.0,
-  ncol = 4
-)
 
 Thermophys_class_panel <- ggarrange(row1,
                                     row2, 
-                                    row3, 
-                                    row4, 
-                                    row5,
-                                    nrow = 5)
+                                    nrow = 2)
 
 ## view
 Thermophys_class_panel
@@ -2172,153 +2118,26 @@ Thermophys_class_panel
 ggsave(
   filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".png"),
   plot = Thermophys_class_panel,
-  height = 23,
-  width = 17,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
 
 ggsave(
-  filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".jpeg"),
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".tiff"),
   plot = Thermophys_class_panel,
-  height = 23,
-  width = 17,
-  unit = "in",
-  dpi = 600
-)
-```
-
-#### Annotate 
-
-```{r thermophys_panel_class_annotate, warning = FALSE, fig.height = 20, fig.width = 15}
-## Create combined top annotation using grobTree
-top_annotation <- grobTree(
-  text_grob(
-    "0 minute\n",
-    size = 16,
-    x = 0.15,
-    y = 0,
-    hjust = 0.5,
-    face = "bold",
-    family = "serif"
-  ),
-  text_grob(
-    "Phase 1\n",
-    size = 16,
-    x = 0.4,
-    y = 0,
-    hjust = 0.5,
-    face = "bold",
-    family = "serif"
-  ),
-  text_grob(
-    "Phase 2\n",
-    size = 16,
-    x = 0.65,
-    y = 0,
-    hjust = 0.5,
-    face = "bold",
-    family = "serif"
-  ),
-  text_grob(
-    "Termination\n",
-    size = 16,
-    x = 0.9,
-    y = 0,
-    hjust = 0.5,
-    face = "bold",
-    family = "serif"
-  )
-)
-
-## Annotate row1
-row1ann <- annotate_figure(
-  row1,
-  left = text_grob(
-    "Rectal Temperature\n",
-    rot = 90,
-    size = 16,
-    face = "bold",
-    family = "serif"
-  ),
-  top = top_annotation
-)
-
-
-## Annotate row2
-row2ann <- annotate_figure(row2,
-                           left = text_grob(
-                             "Mean Skin Temperature\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row3
-row3ann <- annotate_figure(row3,
-                           left = text_grob(
-                             "Mean Body Temperature\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row4
-row4ann <- annotate_figure(row4,
-                           left = text_grob(
-                             "Heart Rate\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row5
-row5ann <- annotate_figure(row5,
-                           left = text_grob(
-                             "Sweat Rate\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Combine rows
-Thermophys_class_panel_ann <- ggarrange(row1ann, 
-                                        row2ann, 
-                                        row3ann, 
-                                        row4ann, 
-                                        row5ann, 
-                                        nrow=5)
-
-## edit top margin to allow more space top annotations
-Thermophys_class_panel_ann <- Thermophys_class_panel_ann +
-  theme(plot.margin = margin(
-    t = 0.4,
-    r = 0.2,
-    b = 0.2,
-    l = 0.2,
-    unit = "inches"
-  ))
-## show panel
-Thermophys_class_panel_ann
-
-ggsave(
-  filename = paste0(analysis_dir, "figs/group_thermophys_panel_annotated", ".png"),
-  plot = Thermophys_class_panel_ann,
-  height = 23,
-  width = 17,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
 
 ggsave(
-  filename = paste0(analysis_dir, "figs/group_thermophys_panel_annotated", ".jpeg"),
-  plot = Thermophys_class_panel_ann,
-  height = 23,
-  width = 17,
+  filename = paste0(analysis_dir, "figs/group_thermophys_panel", ".pdf"),
+  plot = Thermophys_class_panel,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
@@ -2326,95 +2145,42 @@ ggsave(
 
 ## Heat Tolerant and Intolerant
 
-### All Thermo Indices
+### Terminal Values
 
-Tolerant and Intolerant thermophys panel:
-```{r thermophys_panel_outcome, warning = FALSE, fig.height = 20, fig.width = 15}
+```{r thermophys_panel_outcome, fig.height = 8, fig.width = 10}
 row1 <-
   ggarrange(
-    Trec_rest_Outcome_p,
-    Trec_phase1_Outcome_p,
-    Trec_phase2_Outcome_p,
     Trec_term_Outcome_p,
-    labels = LETTERS[1:4],
+    Tskin_term_Outcome_p,
+    Tbody_term_Outcome_p,
+    labels = paste0("(", letters[1:3], ")"),
     font.label = list(
-      size = 18,
+      size = 14, 
       face = "bold",
       family = "serif"
     ),
     vjust = 1.0,
-    ncol = 4
+    ncol = 3
   )
 
 row2 <-
   ggarrange(
-    Tskin_rest_Outcome_p,
-    Tskin_phase1_Outcome_p,
-    Tskin_phase2_Outcome_p,
-    Tskin_term_Outcome_p,
-    labels = LETTERS[5:8],
-    font.label = list(
-      size = 18,
-      face = "bold",
-      family = "serif"
-    ),
-    vjust = 1.0,
-    ncol = 4
-  )
-
-row3 <-
-  ggarrange(
-    Tbody_rest_Outcome_p,
-    Tbody_phase1_Outcome_p,
-    Tbody_phase2_Outcome_p,
-    Tbody_term_Outcome_p,
-    labels = LETTERS[9:12],
-    font.label = list(
-      size = 18,
-      face = "bold",
-      family = "serif"
-    ),
-    vjust = 1.0,
-    ncol = 4
-  )
-
-row4 <-
-  ggarrange(
-    HR_rest_Outcome_p,
-    HR_phase1_Outcome_p,
-    HR_phase2_Outcome_p,
     HR_term_Outcome_p,
-    labels = LETTERS[13:16],
+    sweat_Outcome_p,
+    "",
+    labels = paste0("(", letters[4:5], ")"),
     font.label = list(
-      size = 18,
+      size = 14, 
       face = "bold",
       family = "serif"
     ),
     vjust = 1.0,
-    ncol = 4
+    ncol = 3
   )
-
-row5 <- ggarrange(
-  "",
-  "",
-  "",
-  sweat_Outcome_p,
-  labels = c("", "", "", "Q"),
-  font.label = list(
-    size = 18,
-    face = "bold",
-    family = "serif"
-  ),
-  vjust = 1.0,
-  ncol = 4
-)
 
 Thermophys_outcome_panel <- ggarrange(row1,
                                       row2,
-                                      row3,
-                                      row4,
-                                      row5,
-                                      nrow = 5)
+                                      nrow = 2)
 
 ## view
 Thermophys_outcome_panel
@@ -2422,113 +2188,26 @@ Thermophys_outcome_panel
 ggsave(
   filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".png"),
   plot = Thermophys_outcome_panel,
-  height = 23,
-  width = 17,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
 
 ggsave(
-  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".jpeg"),
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".tiff"),
   plot = Thermophys_outcome_panel,
-  height = 23,
-  width = 17,
-  unit = "in",
-  dpi = 600
-)
-```
-
-#### Annotate 
-
-```{r thermophys_panel_outcome_annotate, warning = FALSE, fig.height = 20, fig.width = 15}
-## Annotate row1
-row1ann <- annotate_figure(
-  row1,
-  left = text_grob(
-    "Rectal Temperature\n",
-    rot = 90,
-    size = 16,
-    face = "bold",
-    family = "serif"
-  ),
-  top = top_annotation
-)
-
-
-## Annotate row2
-row2ann <- annotate_figure(row2,
-                           left = text_grob(
-                             "Mean Skin Temperature\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row3
-row3ann <- annotate_figure(row3,
-                           left = text_grob(
-                             "Mean Body Temperature\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row4
-row4ann <- annotate_figure(row4,
-                           left = text_grob(
-                             "Heart Rate\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Annotate row5
-row5ann <- annotate_figure(row5,
-                           left = text_grob(
-                             "Sweat Rate\n",
-                             rot = 90,
-                             size = 16,
-                             face = "bold",
-                             family = "serif"
-                           ))
-
-## Combine rows
-Thermophys_outcome_panel_ann <-
-  ggarrange(row1ann, 
-            row2ann, 
-            row3ann, 
-            row4ann, 
-            row5ann, 
-            nrow = 5)
-## edit top margin to allow more space top annotations
-Thermophys_outcome_panel_ann <- Thermophys_outcome_panel_ann +
-  theme(plot.margin = margin(
-    t = 0.4,
-    r = 0.2,
-    b = 0.2,
-    l = 0.2,
-    unit = "inches"
-  ))
-## show panel
-Thermophys_outcome_panel_ann
-
-ggsave(
-  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel_annotated", ".png"),
-  plot = Thermophys_outcome_panel_ann,
-  height = 23,
-  width = 17,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
 
 ggsave(
-  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel_annotated", ".jpeg"),
-  plot = Thermophys_outcome_panel_ann,
-  height = 23,
-  width = 17,
+  filename = paste0(analysis_dir, "figs/outcome_thermophys_panel", ".pdf"),
+  plot = Thermophys_outcome_panel,
+  height = 8,
+  width = 10,
   unit = "in",
   dpi = 600
 )
@@ -2541,4 +2220,3 @@ sinfo <- sessionInfo()
 sinfo
 save.image(paste0(analysis_dir, "/HIC_analysis_manuscript_thermophys.Rout"))
 ```
-
