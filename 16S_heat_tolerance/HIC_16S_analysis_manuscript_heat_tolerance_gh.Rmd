@@ -443,7 +443,7 @@ adiv_outcome_plot <- adiv %>%
     text = font,
     axis.title   = element_text(size = 20),
     axis.text.y  = element_text(size = 16),
-    axis.text.x  = element_text(size = 16),
+    axis.text.x  = element_text(size = 12),
     strip.text = element_text(size=26, face = "bold"),
     legend.position = "none") +
   expand_limits(y=0)
@@ -2771,8 +2771,8 @@ genus_dat_NFW[[1]]
 arrange_row1 <- ggarrange(adiv_outcome_plot, 
                           bdiv_outcome_plot,
                           ncol = 2, 
-                          labels = LETTERS[1:2], 
-                          font.label = list(size = 18, 
+                          labels = paste0("(", letters[1:2], ")"), 
+                          font.label = list(size = 14, 
                                             face = "bold", 
                                             family = "serif"))
 
@@ -2781,8 +2781,8 @@ arrange_row2 <- ggarrange(
                           phylum_abund_outcome_p, 
                           genus_abund_outcome_p,
                           ncol = 2, 
-                          labels = LETTERS[3:4], 
-                          font.label = list(size = 18, 
+                          labels = paste0("(", letters[3:4], ")"),
+                          font.label = list(size = 14, 
                                             face = "bold", 
                                             family = "serif"),
                           common.legend = TRUE,
@@ -2806,8 +2806,8 @@ arrange_row3 <- ggarrange(empty_plot,
                           empty_plot,
                           venn_p,
                           ncol = 4, 
-                          labels = c("", LETTERS[5], "", LETTERS[6]), 
-                          font.label = list(size = 18, 
+                          labels = c("", "(e)", "", "(f)"), 
+                          font.label = list(size = 14, 
                                             face = "bold", 
                                             family = "serif"),
                           widths = c(0.2, 0.5, 0.2, 1))
